@@ -181,10 +181,28 @@ importers:
       '@clipdirector/storage-client':
         specifier: workspace:*
         version: link:../../packages/storage-client
+      bullmq:
+        specifier: ^5.8.0
+        version: 5.76.10
+      ioredis:
+        specifier: ^5.4.0
+        version: 5.10.1
     devDependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.600.0
+        version: 3.1049.0
+      testcontainers:
+        specifier: ^11.0.0
+        version: 11.14.0
+      tsx:
+        specifier: ^4.16.0
+        version: 4.22.2
       typescript:
         specifier: ^5.4.0
         version: 5.9.3
+      vitest:
+        specifier: ^4.0.0
+        version: 4.1.6(@types/node@20.19.41)(@vitest/coverage-v8@4.1.6)(vite@7.3.3(@types/node@20.19.41)(tsx@4.22.2)(yaml@2.9.0))
 
   packages/logger:
     dependencies:

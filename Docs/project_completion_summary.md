@@ -219,6 +219,61 @@ The retry-on-validation-failure lives in `processor.ts`, not in the prompt. One 
 - **Token cost note**: with the default frame interval (1/3s) and max 12 clips at 5 min, a worst-case Claude call sends ~100 base64 JPEGs. The PRD's `ANTHROPIC_MAX_TOKENS=2000` only governs the response. Input token consumption could be very high; worth measuring before exposing this to real load.
 - **Whisper short-circuit**: we ffprobe for an `audio` stream before calling OpenAI. Saves API spend on silent clips; if a clip has an audio stream but only contains silence, we still call (could add silence detection later via `silencedetect` filter).
 
-### Open / Next
+### Open / Next (after Phase 3)
 - Phase 4: render-worker (FFmpeg pipeline §8.2 steps 1–9, music selection, output upload). Tests T-08, T-09, T-10.
 - Music library bootstrap blocking Phase 4 end-to-end tests (needs licensed assets under `MUSIC_LIBRARY_PATH/<mood>/*.mp3`).
+
+---
+
+## 2026-05-16 — Phase 4: Render Worker (complete)
+
+### Scope
+PRD Section 16 Phase 4 (steps 30–36): BullMQ worker, FFmpeg pipeline §8.2 steps 1–9 in exact order, music selection, S3 upload, idempotent cleanup. Tests T-08, T-09, T-10.
+
+### Phase 3 surface items rolled in
+- **Skipped deprecated `fluent-ffmpeg`.** Every ffmpeg/ffprobe call uses raw `child_process.spawn` via a tiny `runFfmpeg`/`runFfprobe` helper. Same pattern as the Phase 3 frame sampler.
+- **Music library unblocked for tests.** Instead of waiting on licensed assets, the test harness synthesizes both the source clips (`lavfi testsrc + sine`) and the music track (`lavfi sine 220Hz → libmp3lame`) at suite startup, then uploads the clips to MinIO and writes the music file into `${tmp}/music/energetic/`. Production setup (drop real `.mp3`s under `${MUSIC_LIBRARY_PATH}/<mood>/`) is unchanged.
+
+### Pipeline (§8.2, in order)
+1. **Trim** per clip — re-encode at `-preset ultrafast` for frame-accurate trim (vs `-c copy` which snaps to keyframes).
+2. **Speed** adjust — `setpts` + `atempo`; skips entirely for `speed === 1.0`; branches on audio presence.
+3. **Scale + pad** to `9:16` (1080×1920) / `16:9` (1920×1080) / `1:1` (1080×1080); **injects a silent stereo `anullsrc` track when input has no audio** so steps 4 and 6 see a uniform shape.
+4. **Concat** via demuxer + file list with shell-safe quoting.
+5. **Transitions** — **MVP implements cut only.** Manifests using `fade`/`dissolve` accept and run as cut for now. Documented; xfade is a Phase 5+ follow-up.
+6. **Music mix** per the PRD's amix command: `[1:a]volume=0.3[music]; [0:a][music]amix=inputs=2:duration=first…`. **`audioDuckOnSpeech` is parsed but not yet honored** (sidechaincompress wiring deferred).
+7. **Title cards** — drawtext per `TitleCard` with position-based y, `enable=between(t, start, start+duration)`, black 50% box. Optional `fontfile`; falls back to fontconfig default.
+8. **Captions** — drawtext per `CaptionEntry`. Skipped when `captionStyle === 'none'` or the list is empty.
+9. **Final encode** — `libx264 -crf 23 -preset fast -c:a aac -b:a 192k -movflags +faststart` per the PRD.
+
+The pipeline writes intermediate files to `${RENDER_TEMP_DIR}/${jobId}/work/{segments,...}` exactly as §8.2 documents.
+
+### Music selector
+`createFilesystemMusicSelector({ libraryRoot })`. Lists `${root}/<mood>/`, filters `.mp3`, picks an index derived from `sha256(jobId)` so the same job reproducibly picks the same track. Raises `MusicLibraryError` on missing dir / empty mood. `mood === 'none'` short-circuits to no music.
+
+### Processor + worker
+- `renderJob(payload, deps)` is pure: download clips → pick music → run pipeline → upload → status update. **`try/finally` removes the per-job temp dir on every code path** (T-09 + T-10).
+- `worker.ts` wraps it for BullMQ; on any throw it sets `JobStatusRecord.status='failed'` with the error message before rethrowing for BullMQ retry.
+- Status progression: 50 → 60 (clips down) → 92 (pipeline done) → 95 (uploading) → 100 (complete).
+
+### Tests (4 new, 64 total)
+- **T-08** — Real Redis + real MinIO + real `/usr/bin/ffmpeg`. Two synthesized 3-second clips trimmed to 2s each and concatenated. Asserts: returned `outputUri`, output size > 1 KB, ffprobe sees a real video stream, duration ≈ 4s, Redis status `complete`, progress 100.
+- **T-09** — After a successful render, `${tempRoot}/${jobId}` does not exist on disk.
+- **T-10** — Render is forced to fail by giving a clip URL that doesn't exist in MinIO (`s3://…/does/not/exist.mp4`). `renderJob` throws, the temp dir is still gone, and the job status was not set to `complete`.
+- **bad-idx** — Manifest references `clip_07` when only one source clip was provided. Caught at the trim step as a `RenderError`; cleanup still happens.
+
+### Verification
+- `pnpm -r build` — clean.
+- `pnpm -r test` — **64/64 passing** (queue-client 8 + storage-client 9 + api-gateway 26 + orchestrator 17 + render-worker 4).
+- T-08 completes in ~1.1s end-to-end (synthetic 6-second output, all 9 steps).
+
+### Surface items / known limitations
+- **MVP transitions are cut-only.** `fade`/`dissolve` manifests run as cut. Add xfade in a follow-up; this requires per-pair offset calculations and a chained filter graph.
+- **`audioDuckOnSpeech` parsed but not yet enforced.** Music mix is a uniform 0.3 volume. Real ducking via `sidechaincompress` + speech-segment detection is a follow-up.
+- **drawtext font is fontconfig-default** unless `fontFile` is wired in deps. Containerized deploys (Phase 7 Dockerfile) should explicitly install a font and set the path.
+- **Step 9 always re-encodes** the prior intermediate, even when no titles/captions were applied. We could skip the final-encode pass when steps 7–8 were no-ops, but that complicates `+faststart` placement. Not worth optimizing yet.
+- **Concurrent renders** — `concurrency: 2` per the PRD. Production sizing should benchmark FFmpeg CPU draw before raising.
+
+### Open / Next
+- Phase 5: api-gateway `GET /jobs/:jobId/download` already implemented in Phase 2; the **end-to-end test T-12** (POST /jobs → complete MP4 URL via polling) is the remaining Phase 5 deliverable. Requires both orchestrator and render-worker running against the same Redis.
+- Phase 6: error handling hardening (dead-letter processor, timeout budgets §11.3), tests T-13 + T-14.
+- Phase 7: Dockerfiles per §12.1, docker-compose per §12.2.
