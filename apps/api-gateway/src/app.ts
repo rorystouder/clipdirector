@@ -9,6 +9,7 @@ import type { Db } from './db.js';
 import { HttpError } from './errors.js';
 import { AuthRepository } from './auth/repository.js';
 import { buildAuthRouter } from './auth/routes.js';
+import type { AuthRateLimits } from './auth/rate-limit.js';
 import { buildJobsRouter } from './jobs/routes.js';
 import { buildHealthRouter } from './health/routes.js';
 
@@ -29,6 +30,7 @@ export interface AppDeps {
     maxPromptLength: number;
     maxClipBytes: number;
     signedUrlExpiryHours: number;
+    authRateLimits?: AuthRateLimits;
   };
 }
 
@@ -48,6 +50,7 @@ export function createApp(deps: AppDeps): Express {
         accessTtlMinutes: deps.config.accessTokenTtlMinutes,
         refreshTtlDays: deps.config.refreshTokenTtlDays,
       },
+      ...(deps.config.authRateLimits ? { rateLimits: deps.config.authRateLimits } : {}),
     }),
   );
 

@@ -117,5 +117,41 @@ PRD Section 16 Phase 2 checklist (steps 14–21) **with the PRD §6.2 placeholde
 - No rate limiting on `/auth/login` or `/auth/register` yet — should be added before this faces the public internet.
 - SQLite is fine for MVP; will need Postgres before multi-instance api-gateway deployment.
 
-### Open / Next
+### Open / Next (after Phase 2)
 - Phase 3: orchestrator service (frame sampling via ffmpeg, Whisper transcription via OpenAI, Claude API reasoning, manifest validation). Tests T-04 through T-07.
+
+---
+
+## 2026-05-16 — Phase 2 follow-up: security + correctness sweep
+
+Closed the four surface items called out at the end of Phase 2.
+
+### #1 + #3 — multer 1.4 → 2.1.1+ (HIGH-severity DoS vulns ×7)
+Dependabot showed 7 open HIGH advisories against `multer@1.4.5-lts.2`, all DoS via various malformed-request paths. All fixed by ≥ 2.1.1. Upgraded to `multer@^2.1.1` + `@types/multer@^2.0.0`. API is drop-in for our usage (`memoryStorage`, `array`, `fileFilter`, `MulterError` class all unchanged). The deprecation warning on install is also gone.
+
+### #2 — rate limiting on /auth
+Added `express-rate-limit@^7.4.0` with custom handler that emits our error envelope (`{ code: 'rate_limited', message: '...' }`).
+- `POST /auth/register`: **5 / hour / IP** by default
+- `POST /auth/login`: **10 / 15 min / IP** by default
+- `POST /auth/refresh`: **30 / 15 min / IP** by default
+- All limits are env-injectable via `AppDeps.config.authRateLimits` so tests pass high values without disabling the limiter.
+
+Production note: `express-rate-limit` defaults to an in-memory store. Behind a load balancer this needs a shared backend (`rate-limit-redis`) AND `app.set('trust proxy', ...)` so per-IP counters work correctly. Not wired yet because this is single-instance MVP.
+
+### #4 — false alarm, verified by test
+I claimed multer's `LIMIT_FILE_COUNT` would let the first N clips reach S3 before rejection. Reading the actual flow:
+- multer parses the multipart body and enforces `limits.files` **during parsing**, before any application handler runs.
+- our S3 upload happens in the handler, **after** `upload.array('clips', N)` returns.
+- if N+1 files arrive, multer aborts and the handler is never invoked.
+
+Added test **T-02b** that runs `ListObjectsV2Command` against the input bucket before and after a 13-clip POST; key count is identical. Item closed as a false alarm.
+
+### Test deps bumped to silence dev-scope Dependabot mediums
+- `vitest@^2.1.0` (+ `@vitest/coverage-v8@^2.1.0`) — pulls in vite ≥ 5.4-patched, esbuild ≥ 0.25.
+- `testcontainers@^11.0.0` — newer undici.
+- Vitest 2.x has `fileParallelism: true` by default which broke a second test file's testcontainers setup. Resolved by consolidating rate-limit tests into `api.test.ts` (single set of containers, second `createApp` call with low limits).
+
+### Verification
+- `pnpm -r build` — clean.
+- `pnpm -r test` — **43/43 passing** (queue-client 8 + storage-client 9 + api-gateway 26). Includes new T-02b S3-no-leak assertion and two rate-limit assertions (register 429 after 2, login 429 after 3).
+- Dependabot recheck after push expected to close all production-scope alerts; remaining dev-scope ones should also close with the test-stack bump.

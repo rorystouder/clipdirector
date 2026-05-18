@@ -11,6 +11,7 @@ import {
   type TokenConfig,
 } from './tokens.js';
 import { requireAuth } from './middleware.js';
+import { buildAuthLimiter, DEFAULT_AUTH_RATE_LIMITS, type AuthRateLimits } from './rate-limit.js';
 
 const credentialsSchema = z.object({
   email: z.string().email().max(254).transform((s) => s.toLowerCase()),
@@ -22,6 +23,7 @@ const refreshSchema = z.object({ refreshToken: z.string().min(32) });
 export interface AuthRouterDeps {
   repo: AuthRepository;
   tokens: TokenConfig;
+  rateLimits?: AuthRateLimits;
 }
 
 interface TokenPair {
@@ -45,8 +47,12 @@ function issueTokens(userId: string, email: string, deps: AuthRouterDeps): Token
 
 export function buildAuthRouter(deps: AuthRouterDeps): Router {
   const router = Router();
+  const limits = deps.rateLimits ?? DEFAULT_AUTH_RATE_LIMITS;
+  const registerLimiter = buildAuthLimiter(limits.register);
+  const loginLimiter = buildAuthLimiter(limits.login);
+  const refreshLimiter = buildAuthLimiter(limits.refresh);
 
-  router.post('/register', async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/register', registerLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const parsed = credentialsSchema.safeParse(req.body);
       if (!parsed.success) return next(new ValidationError('Invalid credentials', parsed.error.issues));
@@ -68,7 +74,7 @@ export function buildAuthRouter(deps: AuthRouterDeps): Router {
     }
   });
 
-  router.post('/login', async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/login', loginLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const parsed = credentialsSchema.safeParse(req.body);
       if (!parsed.success) return next(new UnauthorizedError('Invalid email or password'));
@@ -89,7 +95,7 @@ export function buildAuthRouter(deps: AuthRouterDeps): Router {
     }
   });
 
-  router.post('/refresh', (req: Request, res: Response, next: NextFunction) => {
+  router.post('/refresh', refreshLimiter, (req: Request, res: Response, next: NextFunction) => {
     try {
       const parsed = refreshSchema.safeParse(req.body);
       if (!parsed.success) return next(new UnauthorizedError('Invalid refresh token'));

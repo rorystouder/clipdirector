@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import request from 'supertest';
-import { CreateBucketCommand } from '@aws-sdk/client-s3';
+import { CreateBucketCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { Redis } from 'ioredis';
 import { Queue } from 'bullmq';
 import type { Express } from 'express';
@@ -70,6 +70,11 @@ beforeAll(async () => {
       maxPromptLength: 500,
       maxClipBytes: 50 * 1024 * 1024,
       signedUrlExpiryHours: 1,
+      authRateLimits: {
+        login: { windowMs: 60_000, limit: 10_000 },
+        register: { windowMs: 60_000, limit: 10_000 },
+        refresh: { windowMs: 60_000, limit: 10_000 },
+      },
     },
   });
 }, 240_000);
@@ -257,6 +262,30 @@ describe('Jobs — POST /jobs (PRD T-01, T-02, T-03)', () => {
     expect(res.status).toBe(400);
   });
 
+  it('T-02b: a rejected over-limit POST writes NOTHING to S3', async () => {
+    const before = await storage.getNativeClient().send(
+      new ListObjectsV2Command({ Bucket: INPUT_BUCKET }),
+    );
+    const beforeCount = before.KeyCount ?? 0;
+
+    const { accessToken } = await register('t02b@example.com', 'correct-horse-battery-staple');
+    let req2 = request(app)
+      .post('/jobs')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .field('json', validJobJson);
+    for (let i = 0; i < 13; i++) {
+      req2 = req2.attach('clips', fakeVideoBuf, { filename: `c${i}.mp4`, contentType: 'video/mp4' });
+    }
+    const res = await req2;
+    expect(res.status).toBe(400);
+
+    const after = await storage.getNativeClient().send(
+      new ListObjectsV2Command({ Bucket: INPUT_BUCKET }),
+    );
+    const afterCount = after.KeyCount ?? 0;
+    expect(afterCount).toBe(beforeCount);
+  });
+
   it('T-03: non-video MIME returns 400', async () => {
     const { accessToken } = await register('t03@example.com', 'correct-horse-battery-staple');
     const res = await request(app)
@@ -352,5 +381,66 @@ describe('Health', () => {
     expect(res.body.status).toBe('ok');
     expect(res.body.checks.redis.status).toBe('ok');
     expect(res.body.version).toBe('0.1.0-test');
+  });
+});
+
+describe('Rate limiting', () => {
+  // Build a second app instance sharing the same containers but with low rate limits.
+  let strictApp: Express;
+  beforeAll(() => {
+    strictApp = createApp({
+      db: openDatabase(':memory:'),
+      redis,
+      orchestratorQueue: queue,
+      storage,
+      logger: createLogger('api-gateway'),
+      version: '0.1.0-strict',
+      config: {
+        jwtSecret: JWT_SECRET,
+        accessTokenTtlMinutes: 15,
+        refreshTokenTtlDays: 7,
+        inputBucket: INPUT_BUCKET,
+        outputBucket: OUTPUT_BUCKET,
+        maxClipsPerJob: 12,
+        maxPromptLength: 500,
+        maxClipBytes: 50 * 1024 * 1024,
+        signedUrlExpiryHours: 1,
+        authRateLimits: {
+          register: { windowMs: 60_000, limit: 2 },
+          login: { windowMs: 60_000, limit: 3 },
+          refresh: { windowMs: 60_000, limit: 30 },
+        },
+      },
+    });
+  });
+
+  it('returns 429 once /auth/register exceeds its limit', async () => {
+    const reg = (i: number) =>
+      request(strictApp).post('/auth/register').send({
+        email: `rl-reg-${i}@example.com`,
+        password: 'correct-horse-battery-staple',
+      });
+
+    expect((await reg(1)).status).toBe(201);
+    expect((await reg(2)).status).toBe(201);
+    const third = await reg(3);
+    expect(third.status).toBe(429);
+    expect(third.body.code).toBe('rate_limited');
+  });
+
+  it('returns 429 once /auth/login exceeds its limit, regardless of credential validity', async () => {
+    const bad = () =>
+      request(strictApp).post('/auth/login').send({
+        email: 'rl-never-existed@example.com',
+        password: 'correct-horse-battery-staple',
+      });
+
+    let lastStatus = 0;
+    for (let i = 0; i < 8; i++) {
+      const res = await bad();
+      lastStatus = res.status;
+      if (res.status === 429) break;
+    }
+    expect(lastStatus).toBe(429);
   });
 });
