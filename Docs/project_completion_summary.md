@@ -156,3 +156,69 @@ Added test **T-02b** that runs `ListObjectsV2Command` against the input bucket b
 - `pnpm -r build` — clean.
 - `pnpm -r test` — **43/43 passing** (queue-client 8 + storage-client 9 + api-gateway 26). Includes new T-02b S3-no-leak assertion and two rate-limit assertions (register 429 after 2, login 429 after 3).
 - Dependabot recheck after push expected to close all production-scope alerts; remaining dev-scope ones should also close with the test-stack bump.
+
+---
+
+## 2026-05-16 — Phase 3: Orchestrator (complete)
+
+### Scope
+PRD Section 16 Phase 3 checklist (steps 22–29): BullMQ worker, frame sampling, Whisper transcription, Claude API reasoning, manifest validation with single retry, tests T-04 to T-07.
+
+### Architecture
+The orchestrator is split into a pure `processJob(payload, deps)` function and a thin `worker.ts` BullMQ wrapper. Every IO-bound dependency lives behind an interface so tests can stub them without losing real coverage:
+
+- `ClipDownloader` (real impl uses StorageClient)
+- `FrameSampler` (real impl spawns ffmpeg/ffprobe directly via `child_process.spawn`)
+- `Transcriber` (real impl uses OpenAI `whisper-1` via `openai` SDK; checks for audio stream with ffprobe before calling)
+- `ClaudeClient` (real impl uses `@anthropic-ai/sdk`)
+
+The retry-on-validation-failure lives in `processor.ts`, not in the prompt. One Claude call → zod validate → on `ManifestValidationError`, **one** retry with `validationErrors` string appended to the user message. `ManifestParseError` (non-JSON) is NOT retried — that's a different failure mode.
+
+### Files
+- `apps/orchestrator/src/errors.ts` — `ManifestParseError`, `ManifestValidationError` (with `formatIssuesForPrompt()`), `TranscriptionError`, `FrameSamplingError`.
+- `apps/orchestrator/src/manifest/validator.ts` — zod schemas exactly per PRD §7.4; refinements catch `endSec <= startSec` on both clips and captions.
+- `apps/orchestrator/src/claude/prompts.ts` — `SYSTEM_PROMPT` (verbatim per PRD §7.3) + `EDIT_MANIFEST_SCHEMA_EXAMPLE` (concrete JSON shape sent to Claude as a reference) + `stripJsonFences()`.
+- `apps/orchestrator/src/claude/client.ts` — builds image blocks (`type: 'image', source: { type: 'base64', media_type: 'image/jpeg' }`), interleaves clip-meta text with transcript snippets, calls `messages.create`, JSON-parses the response. Appends `validationErrors` on retry calls.
+- `apps/orchestrator/src/clips/frame-sampler.ts` — direct `spawn('ffmpeg', ...)` for `-ss {t} -i {clip} -vframes 1 -vf scale=512:-1 -f image2 -q:v 5 pipe:1`; ffprobe for duration. Avoids `fluent-ffmpeg` runtime quirks (still listed for API parity, but the production code paths bypass it).
+- `apps/orchestrator/src/clips/transcriber.ts` — OpenAI Whisper; ffprobe checks for an audio stream first and returns `''` for silent clips (avoids wasting API calls).
+- `apps/orchestrator/src/clips/downloader.ts` — parses `s3://bucket/key`, downloads via StorageClient.
+- `apps/orchestrator/src/processor.ts` — pure processJob with the full sequence + temp dir cleanup in a `finally`.
+- `apps/orchestrator/src/worker.ts` — BullMQ Worker; on any throw, sets job status to `failed` with `errorMessage` and rethrows for BullMQ's retry handling.
+- `apps/orchestrator/src/index.ts` — wires real deps from validated env.
+
+### Tests (17 new, 60 total across repo)
+- `manifest/validator.test.ts` (11 tests):
+  - **T-05**: valid manifest passes.
+  - **T-07**: clip with `endSec <= startSec` rejected.
+  - Caption with `endSec <= startSec` rejected (same refinement, second path).
+  - Clip id not matching `clip_NN` rejected.
+  - Speed outside `[0.5, 2.0]` rejected.
+  - `targetDurationSec > 90` rejected.
+  - Empty clips array rejected.
+  - `schemaVersion != "1.0"` rejected.
+  - `aspectRatio` outside enum rejected.
+  - `titleCard.durationSec > 5` rejected.
+  - 13-element clips array rejected.
+  - `formatIssuesForPrompt()` produces a non-empty, path-tagged string.
+- `processor.test.ts` (4 tests, real Redis testcontainer, stubbed claude/downloader/sampler/transcriber):
+  - One-attempt success path; render queue gets the manifest with the expected `outputBlobPath`.
+  - **T-06**: invalid-then-valid retry — exactly 2 calls, second call carries `validationErrors`.
+  - Invalid both times — `ManifestValidationError` thrown, render queue empty (no spurious enqueue).
+  - `ManifestParseError` does **not** retry (parsing is a different failure mode from validation).
+- `__tests__/integration.test.ts` (1 test, full real pipeline):
+  - **T-04**: real Redis + real MinIO testcontainers + real ffmpeg on a synthetic mp4 generated via `lavfi testsrc` + real downloader + real frame sampler + stubbed transcriber + stubbed Claude. Asserts: Claude received >=1 real base64 JPEG block; render queue received the `RenderJobPayload` with original `clipUrls` and correct `outputBlobPath`; status advanced to `rendering`; temp dir was cleaned up.
+
+### Verification
+- `pnpm -r build` — clean.
+- `pnpm -r test` — **60/60 passing** (queue-client 8 + storage-client 9 + api-gateway 26 + orchestrator 17).
+
+### Surface items / notes
+- **`fluent-ffmpeg` is deprecated** (last release 2024). We still list it for parity with the PRD, but the actual frame-sampling code uses raw `child_process.spawn` against `/usr/bin/ffmpeg`. Render-worker (Phase 4) will need to either use raw spawn or pick a maintained wrapper.
+- **`ANTHROPIC_MODEL` defaults to `claude-sonnet-4-20250514`** per the PRD; that model name predates today's lineup. Set `ANTHROPIC_MODEL=claude-sonnet-4-6` (or whichever current model fits) at deploy time.
+- **No real Anthropic / OpenAI API calls in tests** — Claude is stubbed, transcriber is stubbed. The real SDK code paths are exercised only at runtime against valid API keys, not in CI.
+- **Token cost note**: with the default frame interval (1/3s) and max 12 clips at 5 min, a worst-case Claude call sends ~100 base64 JPEGs. The PRD's `ANTHROPIC_MAX_TOKENS=2000` only governs the response. Input token consumption could be very high; worth measuring before exposing this to real load.
+- **Whisper short-circuit**: we ffprobe for an `audio` stream before calling OpenAI. Saves API spend on silent clips; if a clip has an audio stream but only contains silence, we still call (could add silence detection later via `silencedetect` filter).
+
+### Open / Next
+- Phase 4: render-worker (FFmpeg pipeline §8.2 steps 1–9, music selection, output upload). Tests T-08, T-09, T-10.
+- Music library bootstrap blocking Phase 4 end-to-end tests (needs licensed assets under `MUSIC_LIBRARY_PATH/<mood>/*.mp3`).
