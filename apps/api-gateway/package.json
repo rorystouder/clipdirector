@@ -1,0 +1,21 @@
+{
+  "name": "@clipdirector/api-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@clipdirector/logger": "workspace:*",
+    "@clipdirector/queue-client": "workspace:*",
+    "@clipdirector/shared-types": "workspace:*",
+    "@clipdirector/storage-client": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

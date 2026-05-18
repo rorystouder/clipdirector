@@ -1,0 +1,5 @@
+packages:
+  - "apps/api-gateway"
+  - "apps/orchestrator"
+  - "apps/render-worker"
+  - "packages/*"
