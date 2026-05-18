@@ -147,9 +147,10 @@ I claimed multer's `LIMIT_FILE_COUNT` would let the first N clips reach S3 befor
 Added test **T-02b** that runs `ListObjectsV2Command` against the input bucket before and after a 13-clip POST; key count is identical. Item closed as a false alarm.
 
 ### Test deps bumped to silence dev-scope Dependabot mediums
-- `vitest@^2.1.0` (+ `@vitest/coverage-v8@^2.1.0`) — pulls in vite ≥ 5.4-patched, esbuild ≥ 0.25.
+- `vitest@^4.0.0` (+ `@vitest/coverage-v8@^4.0.0`) — pulls in vite 7 + esbuild 0.27, which cleans the lockfile of vite 5.x and esbuild 0.21.x references. Vitest 4 flattened `poolOptions.forks` → `forks`; configs updated.
+- Explicit `vite ^7` at root because vitest 4 declares vite as a peer dep that pnpm does not auto-install.
 - `testcontainers@^11.0.0` — newer undici.
-- Vitest 2.x has `fileParallelism: true` by default which broke a second test file's testcontainers setup. Resolved by consolidating rate-limit tests into `api.test.ts` (single set of containers, second `createApp` call with low limits).
+- Vitest 2.x+ has `fileParallelism: true` by default which broke a second test file's testcontainers setup. Resolved by consolidating rate-limit tests into `api.test.ts` (single set of containers, second `createApp` call with low limits).
 
 ### Verification
 - `pnpm -r build` — clean.

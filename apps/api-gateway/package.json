@@ -39,6 +39,6 @@
     "testcontainers": "^11.0.0",
     "tsx": "^4.16.0",
     "typescript": "^5.4.0",
-    "vitest": "^2.1.0"
+    "vitest": "^4.0.0"
   }
 }
