@@ -13,12 +13,17 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@clipdirector/shared-types": "workspace:*"
+    "@clipdirector/shared-types": "workspace:*",
+    "bullmq": "^5.8.0",
+    "ioredis": "^5.4.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "testcontainers": "^10.10.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
   }
 }
