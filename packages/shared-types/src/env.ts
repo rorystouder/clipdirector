@@ -22,10 +22,14 @@ export const baseEnvSchema = z.object({
 
 export const apiGatewayEnvSchema = baseEnvSchema.extend({
   API_PORT: z.coerce.number().int().positive().default(3000),
-  JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
+  JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
+  ACCESS_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(15),
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
+  DATABASE_FILE: z.string().min(1).default('./data/clipdirector.db'),
   MAX_CLIPS_PER_JOB: z.coerce.number().int().positive().default(12),
   MAX_RAW_FOOTAGE_MINUTES: z.coerce.number().int().positive().default(5),
   MAX_PROMPT_LENGTH: z.coerce.number().int().positive().default(500),
+  MAX_CLIP_BYTES: z.coerce.number().int().positive().default(500 * 1024 * 1024),
   INPUT_BLOB_TTL_HOURS: z.coerce.number().int().positive().default(2),
   OUTPUT_BLOB_TTL_DAYS: z.coerce.number().int().positive().default(7),
   JOB_STATUS_TTL_DAYS: z.coerce.number().int().positive().default(7),
@@ -50,10 +54,15 @@ export type ApiGatewayEnv = z.infer<typeof apiGatewayEnvSchema>;
 export type OrchestratorEnv = z.infer<typeof orchestratorEnvSchema>;
 export type RenderWorkerEnv = z.infer<typeof renderWorkerEnvSchema>;
 
-export function validateEnv<T>(schema: z.ZodType<T>, source: NodeJS.ProcessEnv = process.env): T {
+export function validateEnv<S extends z.ZodTypeAny>(
+  schema: S,
+  source: NodeJS.ProcessEnv = process.env,
+): z.infer<S> {
   const result = schema.safeParse(source);
   if (!result.success) {
-    const issues = result.error.issues.map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`).join('\n');
+    const issues = result.error.issues
+      .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join('\n');
     throw new Error(`Environment validation failed:\n${issues}`);
   }
   return result.data;

@@ -65,7 +65,57 @@ PRD Section 16 Phase 1 checklist steps 9–13: implement queue-client + storage-
 - Docker daemon is available on the host (29.1.3); both containers spin up in <5s and the full suite finishes in ~3s of test time.
 - `crypto-pro/ssh2` triggered a one-time native build during install. No action needed but flagged for the record.
 
-### Open / Next
+### Open / Next (after Phase 1)
 - Phase 2: api-gateway (Express, JWT, `POST /jobs` with multer + zod, `GET /jobs/:id`, `GET /health`). Will land integration tests T-01, T-02, T-03, T-11.
 - Decide on auth model for MVP (PRD allows "simple secret exchange" placeholder for now).
 - Music library bootstrap: PRD Section 8.4 expects `${MUSIC_LIBRARY_PATH}/<mood>/*.mp3` plus a `metadata.json`. Needs licensed assets before Phase 4 integration tests can run.
+
+---
+
+## 2026-05-16 — Phase 2: API Gateway with real auth (complete)
+
+### Scope
+PRD Section 16 Phase 2 checklist (steps 14–21) **with the PRD §6.2 placeholder auth replaced by a real model** at the user's explicit request.
+
+### Auth model (replaces PRD §6.2 placeholder)
+- **Identity**: email + password (email normalized to lowercase, max 254 chars).
+- **Password hashing**: Argon2id via `argon2`. Memory cost 19,456 KiB, time cost 2, parallelism 1. Minimum password length 12.
+- **Access token**: HS256 JWT, 15-minute TTL (env-tunable). Claims: `sub` (userId), `email`, `iat`, `exp`. Signed with `JWT_SECRET` (zod-enforced 32+ chars).
+- **Refresh token**: opaque 256-bit random hex (64 chars). Stored as SHA-256 hash in `refresh_tokens`. **Rotated on every use** — old token revoked, new pair issued. 7-day TTL (env-tunable).
+- **Revocation**: `revoked_at` column on `refresh_tokens`. Logout revokes the presented refresh; the access JWT remains valid until its 15-min expiry.
+- **Storage**: SQLite via `better-sqlite3` (file path from `DATABASE_FILE`, WAL mode, FKs enforced). Two tables: `users`, `refresh_tokens`. Schema applied idempotently on boot. Repository pattern (`AuthRepository`) keeps the Postgres swap small later.
+- **Endpoints**:
+  - `POST /auth/register` → 201 + `{ user, accessToken, refreshToken, expiresInSec }`
+  - `POST /auth/login` → 200 + same shape; uniform 401 on bad creds **and** unknown email (no existence leak)
+  - `POST /auth/refresh` → 200 + rotated pair; replayed/expired/revoked refresh → 401
+  - `POST /auth/logout` → 204; revokes the refresh
+  - `GET /auth/me` → 200 + `{ user }` (Bearer-protected)
+- **Middleware**: `requireAuth` parses `Authorization: Bearer …`, verifies HS256 with `JWT_SECRET`, attaches `req.user = { id, email }` via a global `Express.Request` augmentation.
+
+### Jobs endpoints (per PRD §6.2, §6.3)
+- `POST /jobs` — auth required; `multer.memoryStorage()` with `MAX_CLIPS_PER_JOB` file limit and `MAX_CLIP_BYTES` size limit; `fileFilter` rejects non-`video/*` MIME types as 400 (`ValidationError`); `json` multipart field parsed and validated with zod (`userPrompt`, `platform`, `musicMood`, `captionStyle`). Each clip uploaded to S3 at `input/{userId}/{jobId}/clip_{nn}`; initial `JobStatusRecord` written via `setJobStatus`; orchestrator job enqueued. Returns 202 + `{ jobId, status: 'queued' }`.
+- `GET /jobs/:jobId` — auth required; reads via `getJobStatus`; **403 if the JobStatusRecord's `userId` doesn't match the JWT subject** (no global admin role); 404 if missing.
+- `GET /jobs/:jobId/download` — auth + ownership check; only valid when `status === 'complete'`; returns a presigned URL valid for 1 hour.
+- `GET /health` — Redis ping with latency, orchestrator queue job counts, version. 200 / 503 based on health.
+
+### Other changes
+- `apps/api-gateway/src/{app.ts,index.ts}` — Express factory pattern: `createApp(deps)` for tests; `index.ts` wires real Redis, Queue, StorageClient, SQLite. Centralized error middleware translates `HttpError` subclasses and `MulterError` into JSON shapes (`{ code, message, details }`).
+- `apps/api-gateway/src/errors.ts` — typed error hierarchy (`HttpError` + `Validation/Unauthorized/Forbidden/NotFound/Conflict`).
+- `packages/shared-types/src/env.ts`: tightened `JWT_SECRET` to 32+ chars; added `ACCESS_TOKEN_TTL_MINUTES`, `REFRESH_TOKEN_TTL_DAYS`, `DATABASE_FILE`, `MAX_CLIP_BYTES`. `validateEnv` signature changed to `<S extends z.ZodTypeAny>(schema: S) => z.infer<S>` so zod-with-defaults infers required output types correctly.
+
+### Verification status
+- `pnpm -r build` — **passed** (zero TS errors).
+- `pnpm -r test` — **40/40 passing**:
+  - `queue-client` 8, `storage-client` 9, `api-gateway` 23.
+  - Integration suite spins real `redis:7-alpine` + `minio/minio` testcontainers; supertest hits the Express app with in-memory SQLite per run.
+  - Auth tests (failure-shaped): duplicate-email 409, short password 400, unknown-email 401 (no existence leak), wrong-password 401, missing/malformed/wrong-secret JWTs 401, refresh-rotation-and-replay rejection, logout-revokes-refresh.
+  - Jobs tests: T-01 (202 + Redis status record), T-02 (>12 clips 400), T-03 (non-video MIME 400), missing-auth 401, missing-json 400, malformed-json 400, T-11 (status round-trip with `progress` as number), cross-user 403, unknown-job 404.
+
+### Surface items
+- `multer 1.4.5-lts` and `uuid 9.0.1` show npm deprecation warnings. Both still install and work cleanly. Migrating to multer 2.x is a future task.
+- `Access token` lifetime is intentionally short (15 min) and the JWT is not server-side revocable mid-lifetime — that's standard. If we need stricter mid-flight revocation later, a Redis-backed JWT denylist is the next step.
+- No rate limiting on `/auth/login` or `/auth/register` yet — should be added before this faces the public internet.
+- SQLite is fine for MVP; will need Postgres before multi-instance api-gateway deployment.
+
+### Open / Next
+- Phase 3: orchestrator service (frame sampling via ffmpeg, Whisper transcription via OpenAI, Claude API reasoning, manifest validation). Tests T-04 through T-07.
