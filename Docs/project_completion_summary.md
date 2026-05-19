@@ -359,7 +359,7 @@ Previously: any throw in either worker set Redis status to `failed` immediately 
 
 ---
 
-## 2026-05-19 — Phase 7: Dockerfiles + docker-compose (unverified)
+## 2026-05-19 — Phase 7: Dockerfiles + docker-compose (verified)
 
 ### Scope
 PRD Section 16 Phase 7 (steps 37–41): per-service Dockerfiles §12.1 and a docker-compose for local dev §12.2.
@@ -373,15 +373,22 @@ PRD Section 16 Phase 7 (steps 37–41): per-service Dockerfiles §12.1 and a doc
 
 ### Verification status
 - `pnpm -r build` and `pnpm -r test` still pass (Dockerfiles are not in the build/test paths).
-- `docker build` and `docker compose up` — **NOT YET RUN.** Per the global "always manually test by me before closing bugs" rule, this stays open until the user smoke-tests the stack locally.
+- **Manual `docker compose up` smoke test passed on 2026-05-19** against `ANTHROPIC_MODEL=claude-sonnet-4-6`. All six containers reached their expected state (redis + minio healthy, minio-init exited 0, api-gateway / orchestrator / render-worker running). `/health` returned HTTP 200 with `redis.status: ok`. End-to-end job: registered a user, submitted two synthesized silent clips with `musicMood: "none"`, the job moved `queued → planning → rendering → uploading → complete`, and a 6.018s, 213 KB, 283 kbps MP4 landed in the output bucket. ffprobe confirmed a valid MP4 format header on the downloaded file. Phase 7 closes.
 
-### Surface items / open
+### Mid-flight fixes during the smoke
+- **Host port 6379 conflicted** with another local Redis (a leftover `crispy-umbrella_redis_1` container from a different project). Resolved by remapping our compose Redis to host port 16379 in `infra/compose/docker-compose.yml`. Internal services still address `redis:6379` over the compose network. Three-line comment in the compose file documents why.
+
+### Surface items discovered (not blocking, captured for Phase 8 / later)
+- **Presigned URL host resolution.** `GET /jobs/:id/download` correctly returns a presigned URL, but in compose-mode the URL points to `http://minio:9000/...` which doesn't resolve from the host. The signature is bound to the host header so we can't just substitute `localhost`. Workarounds for verification: use the MinIO console at `localhost:9001`, or `aws s3 cp --endpoint-url http://localhost:9000`. In real-AWS mode (Phase 8) the URL will be `https://...s3.amazonaws.com/...` and this is a non-issue.
+- **MinIO root credentials drift.** The compose interpolation `${AWS_ACCESS_KEY_ID:-minioadmin}` is supposed to feed real AWS keys from `.env` into MinIO as its root creds. In practice, MinIO ended up using `minioadmin/minioadmin` — most likely because the volume was initialized on an earlier compose `up` before `.env` had real keys, and MinIO persists root creds across restarts. Clean-up: `docker compose down -v` to drop the MinIO volume, then `up -d` re-initializes from current `.env`. Not done on this run because it was harmless for the smoke.
+- **`AWS_S3_INPUT_BUCKET` / `AWS_S3_OUTPUT_BUCKET` in `.env` are the example defaults (`clipdirector-input` / `clipdirector-output`), not the real AWS bucket names (`gain3d-clipdirector-input` / `-output`).** MinIO created buckets with the defaults; all services agreed on the names so nothing broke. Should be updated to the real bucket names before Phase 8 prod-mode work so the env file matches reality.
+- **AWS SDK v3 deprecation warning** on Node 20. The SDK will require Node ≥ 22 after January 2027. One-line bump of the Dockerfile base image (`node:20` → `node:22`, `node:20-alpine` → `node:22-alpine`) before that date.
 - The orchestrator/render-worker runtime images are Ubuntu, not Alpine, because `node-gyp` + the Anthropic/OpenAI SDKs build cleaner against glibc. This costs ~150 MB per image vs. an Alpine equivalent; acceptable for dev/staging, worth revisiting before production.
 - `pnpm deploy --prod` removes `devDependencies` from the deployed tree. The api-gateway image therefore does **not** include `@clipdirector/orchestrator` or `@clipdirector/render-worker` (those are dev-only deps used by the e2e test). Good.
 - `ANTHROPIC_MODEL` defaults to `claude-sonnet-4-20250514` in compose, matching the PRD. Override at deploy time to a current model id (e.g. `claude-sonnet-4-6`).
 - Compose does not expose Redis or MinIO over TLS — local dev only.
 
 ### Open / Next
-- Manual smoke test of `docker compose --env-file .env up -d` against a `JWT_SECRET`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`. Confirm `/health` is green, POST `/auth/register` works, POST `/jobs` runs through to a downloadable MP4.
 - Add at least one royalty-free track per mood under `music/<mood>/`. CI synthesizes its own; production needs real assets.
-- Phase 8 (observability) and Phase 9 (Android wiring) per the PRD checklist.
+- Phase 8 (production deployment mode — see PRD amendment items 51-58): separate dev-mode MinIO from prod-mode real S3, then re-run the smoke against `gain3d-clipdirector-*` directly.
+- Phase 9 (Android wiring) per the PRD checklist.

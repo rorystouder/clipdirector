@@ -11,7 +11,10 @@
 services:
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    # Host port 16379 (not 6379) to avoid conflicting with other local
+    # Redis instances. Internal services still address redis:6379 over
+    # the compose network. For host-side debug: redis-cli -h localhost -p 16379
+    ports: ["16379:6379"]
     volumes: ["redis-data:/data"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

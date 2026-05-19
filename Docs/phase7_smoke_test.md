@@ -129,15 +129,47 @@ done
 
 ## 10. Download the MP4
 
+**Heads up: the presigned URL from `/jobs/:id/download` will look reachable but won't work from your host in compose-mode.** It points to `http://minio:9000/...` — that hostname only resolves inside the compose network, and the signature is bound to that host so you can't substitute `localhost`. The fix is Phase 8 (prod-mode against real S3 URLs). For this smoke, verify via the MinIO console instead.
+
+### Recommended: download via the MinIO console
+
+1. Open **http://localhost:9001** in your browser.
+2. Log in. Credentials are MinIO's root creds — which compose tries to set from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in `.env`, but **MinIO persists root creds across restarts**, so if the volume was ever initialized with defaults, that's still what works. Try `minioadmin` / `minioadmin` first; if rejected, try your `.env` AWS keys.
+3. Browse to the `clipdirector-output` bucket (or whatever `AWS_S3_OUTPUT_BUCKET` resolves to). You should see `output/<userId>/<jobId>/output.mp4`.
+4. Click the file → use the download button on its detail panel → save locally.
+5. Validate:
+   ```bash
+   ffprobe -v error -show_entries format=duration,size,bit_rate ~/Downloads/output.mp4
+   xxd ~/Downloads/output.mp4 | head -1
+   ```
+
+- [ ] `duration` is close to your manifest's `targetDurationSec` (~6s for the default smoke prompt).
+- [ ] `size` > 1 KB.
+- [ ] ffprobe doesn't error.
+- [ ] `xxd` first line shows `ftyp` characters in bytes 4–8.
+
+### Alternative: AWS CLI against MinIO's host port
+
+If you'd rather stay in the terminal, you can hit MinIO directly with `aws s3 cp --endpoint-url http://localhost:9000`. You need MinIO's *actual* root credentials, which (per the gotcha above) may not match what's in your `.env`. Try `minioadmin/minioadmin` first.
+
 ```bash
-URL=$(curl -s -H "Authorization: Bearer $TOKEN" http://localhost:3000/jobs/$JOB/download | jq -r .url)
-curl -s -o /tmp/smoke-output.mp4 "$URL"
+AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin \
+  aws --endpoint-url http://localhost:9000 --region us-east-1 \
+      s3 ls s3://clipdirector-output/ --recursive
+
+KEY=$(AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin \
+      aws --endpoint-url http://localhost:9000 --region us-east-1 \
+          s3api list-objects-v2 --bucket clipdirector-output \
+          --query 'Contents[?ends_with(Key, `.mp4`)].Key | [0]' --output text)
+
+AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin \
+  aws --endpoint-url http://localhost:9000 --region us-east-1 \
+      s3 cp "s3://clipdirector-output/$KEY" /tmp/smoke-output.mp4
+
 ffprobe -v error -show_entries format=duration,size,bit_rate /tmp/smoke-output.mp4
 ```
 
-- [ ] `duration` ≈ 4s (two 2-second trims concatenated).
-- [ ] `size` > 1 KB.
-- [ ] ffprobe doesn't error. Open in a player if you want — the file should actually play.
+If you get `InvalidAccessKeyId`, MinIO's root creds aren't `minioadmin`. Try your `.env` values; if neither works, `docker compose down -v && up -d` to wipe the MinIO volume and re-init from current `.env`.
 
 ## 11. Failure-mode spot checks (optional but recommended)
 
