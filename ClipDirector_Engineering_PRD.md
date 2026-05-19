@@ -530,6 +530,27 @@ Use the shared logger package (Pino). Every log entry must include:
 
 58. Verify: rotating `clipdirector-app` access keys (`aws iam create-access-key` → swap into `.env` → `aws iam delete-access-key` on the old one) requires only a `docker compose restart` of the three app services, not a rebuild
 
+### **Phase 9 — Android Build Verification (Amendment 2026-05-19)**
+
+| ℹ️ CONTEXT The `apps/android` scaffold was created in Phase 0 (items 48-50): Kotlin + Compose project layout, five empty screen files with `// TODO Phase 2` placeholders, `MainActivity`, a `ClipDirectorApi` Retrofit interface stub, and `build.gradle.kts` files. Beyond the scaffold, no Android work has happened. The WSL host has **JDK 1.8.0** (AGP 8.5 requires JDK 17+), no Android SDK installed, and `apps/android/gradle/wrapper/` is empty — the gradle wrapper was never generated, so `./gradlew` cannot be run yet. Phase 9 covers the toolchain installation and gradle-wrapper bootstrap needed to make the existing scaffold compile against a real Android SDK, producing a green `assembleDebug` baseline. **Implementing the actual screen logic (real `/auth` calls, MediaStore file picker, polling UI, ExoPlayer playback, refresh-token handling, history persistence) is OUT OF SCOPE for Phase 9 and would be a future Phase 10 amendment.** |
+| :---- |
+
+59. Install JDK 17 (or 21) on the WSL host. Recommended: `sudo apt install openjdk-17-jdk-headless`. Set `JAVA_HOME` in your shell rc to the install path (e.g. `/usr/lib/jvm/java-17-openjdk-amd64`). Verify: `java -version` reports 17 or 21
+
+60. Install Android command-line tools + SDK 34. Download cmdline-tools from developer.android.com/studio#command-tools, extract to `$ANDROID_HOME/cmdline-tools/latest/`, accept licenses via `sdkmanager --licenses`, then install `sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"`. Set `ANDROID_HOME` and `ANDROID_SDK_ROOT` in shell rc
+
+61. Install a system Gradle (one-time, only needed to bootstrap the wrapper). Easiest: `sdk install gradle 8.7` via SDKMAN. Then from `apps/android/`: `gradle wrapper --gradle-version 8.7 --distribution-type all`. This generates `apps/android/gradlew`, `gradlew.bat`, and `gradle/wrapper/gradle-wrapper.{jar,properties}`
+
+62. Create `apps/android/local.properties` with `sdk.dir=<absolute path to your $ANDROID_HOME>`. This file MUST NOT be committed (it pins to a machine-specific path); confirm `apps/android/local.properties` is in `.gitignore` before proceeding
+
+63. Verify: `cd apps/android && ./gradlew :app:assembleDebug` exits 0 and produces `app/build/outputs/apk/debug/app-debug.apk`
+
+64. Verify: `./gradlew :app:lintDebug` reports no critical findings on the placeholder code (minor warnings on `// TODO` blocks are acceptable)
+
+65. Commit the gradle wrapper files (`gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`, `gradle/wrapper/gradle-wrapper.properties`). After this commit, future contributors do not need a system gradle — `./gradlew` bootstraps itself
+
+66. Update `apps/android/README.md` with onboarding instructions: required JDK, SDK setup, build command, output APK path. Replace any placeholder content from Phase 0
+
 # **17\. Constraints and Non-Negotiables**
 
 | 🚫 CRITICAL These constraints must never be violated. They are not negotiable and are not subject to interpretation. |

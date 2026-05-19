@@ -390,7 +390,7 @@ PRD Section 16 Phase 7 (steps 37–41): per-service Dockerfiles §12.1 and a doc
 
 ### Open / Next
 - Add at least one royalty-free track per mood under `music/<mood>/`. CI synthesizes its own; production needs real assets.
-- Phase 9 (Android wiring) per the PRD checklist.
+- Phase 9 (Android build verification — toolchain + scaffold compile baseline) per PRD amendment items 59-66. Full Android UI implementation deliberately deferred to a future Phase 10 amendment.
 
 ---
 
@@ -432,6 +432,6 @@ PRD §16 Phase 8 items 51-58 (the amendment added earlier the same day after the
 - No persistent state left in AWS beyond the IAM user/policy/active key from the original walkthrough.
 
 ### Open / Next
-- Phase 9 (Android wiring) per the PRD checklist.
+- Phase 9 (Android build verification — toolchain + scaffold compile baseline) per PRD amendment items 59-66. Full Android UI implementation deliberately deferred to a future Phase 10 amendment.
 - Bump Dockerfile base images from `node:20` to `node:22` before January 2027 (AWS SDK v3 deprecation warning).
 - Add at least one royalty-free track per mood under `music/<mood>/` for real music wiring.
