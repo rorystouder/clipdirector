@@ -3,8 +3,16 @@ package ai.clipdirector
 import android.app.Application
 
 /**
- * Application subclass. In Phase 10.2 this will lazily construct an
- * [AppContainer] holding TokenStore + NetworkModule + repositories.
- * For now it's a no-op stub so the manifest's [android:name] reference resolves.
+ * Process-wide entry point. Holds the [AppContainer] (manual DI).
+ * Accessed from any [android.content.Context] via [appContainer].
  */
-class ClipDirectorApp : Application()
+class ClipDirectorApp : Application() {
+
+    lateinit var container: AppContainer
+        private set
+
+    override fun onCreate() {
+        super.onCreate()
+        container = AppContainer(this)
+    }
+}
