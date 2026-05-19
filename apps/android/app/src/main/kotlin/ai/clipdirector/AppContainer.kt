@@ -5,6 +5,7 @@ import ai.clipdirector.data.auth.TokenStore
 import ai.clipdirector.data.error.ApiErrorAdapter
 import ai.clipdirector.data.job.JobIdStore
 import ai.clipdirector.data.job.JobRepository
+import ai.clipdirector.data.job.SubmissionDraft
 import ai.clipdirector.data.network.NetworkModule
 import android.content.Context
 
@@ -19,6 +20,7 @@ class AppContainer(context: Context) {
 
     val tokenStore: TokenStore = TokenStore(appContext)
     val jobIdStore: JobIdStore = JobIdStore(appContext)
+    val submissionDraft: SubmissionDraft = SubmissionDraft()
 
     private val errorAdapter = ApiErrorAdapter()
     private val network = NetworkModule(tokenStore)

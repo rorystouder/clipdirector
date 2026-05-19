@@ -22,17 +22,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import kotlinx.coroutines.runBlocking
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Read tokens synchronously to pick start destination — runs once on
-        // activity creation. DataStore read is cheap after hydration.
         val hasTokens = runBlocking { appContainer.tokenStore.current() != null }
         setContent {
             MaterialTheme {
@@ -49,12 +48,8 @@ private fun ClipDirectorApp(startWithAuth: Boolean) {
     val nav = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Wire ErrorBus messages to the snackbar — one collector, lives for the
-    // lifetime of the composition.
     LaunchedEffect(Unit) {
-        ErrorBus.messages.collect { msg ->
-            snackbarHostState.showSnackbar(msg)
-        }
+        ErrorBus.messages.collect { msg -> snackbarHostState.showSnackbar(msg) }
     }
 
     Scaffold(
@@ -69,9 +64,7 @@ private fun ClipDirectorApp(startWithAuth: Boolean) {
             composable("login") {
                 LoginScreen(
                     onLoggedIn = {
-                        nav.navigate("clips") {
-                            popUpTo("login") { inclusive = true }
-                        }
+                        nav.navigate("clips") { popUpTo("login") { inclusive = true } }
                     },
                     onNavigateToRegister = { nav.navigate("register") },
                 )
@@ -79,9 +72,7 @@ private fun ClipDirectorApp(startWithAuth: Boolean) {
             composable("register") {
                 RegisterScreen(
                     onRegistered = {
-                        nav.navigate("clips") {
-                            popUpTo("login") { inclusive = true }
-                        }
+                        nav.navigate("clips") { popUpTo("login") { inclusive = true } }
                     },
                     onNavigateToLogin = { nav.popBackStack("login", inclusive = false) },
                 )
@@ -91,16 +82,43 @@ private fun ClipDirectorApp(startWithAuth: Boolean) {
                 ClipSelectScreen(onNext = { nav.navigate("prompt") })
             }
             composable("prompt") {
-                PromptScreen(onSubmit = { nav.navigate("processing") })
+                PromptScreen(onSubmit = { jobId ->
+                    nav.navigate("processing/$jobId") {
+                        popUpTo("clips") { inclusive = false }
+                    }
+                })
             }
-            composable("processing") {
-                ProcessingScreen(onComplete = { nav.navigate("preview") })
+            composable(
+                route = "processing/{jobId}",
+                arguments = listOf(navArgument("jobId") { type = NavType.StringType }),
+            ) { entry ->
+                val jobId = entry.arguments?.getString("jobId").orEmpty()
+                ProcessingScreen(
+                    jobId = jobId,
+                    onComplete = { id ->
+                        nav.navigate("preview/$id") {
+                            popUpTo("clips") { inclusive = false }
+                        }
+                    },
+                    onRetry = { nav.popBackStack("prompt", inclusive = false) },
+                )
             }
-            composable("preview") {
-                PreviewScreen(onHome = { nav.navigate("clips") })
+            composable(
+                route = "preview/{jobId}",
+                arguments = listOf(navArgument("jobId") { type = NavType.StringType }),
+            ) { entry ->
+                val jobId = entry.arguments?.getString("jobId").orEmpty()
+                PreviewScreen(
+                    jobId = jobId,
+                    onHome = {
+                        nav.navigate("clips") {
+                            popUpTo("clips") { inclusive = true }
+                        }
+                    },
+                )
             }
             composable("history") {
-                HistoryScreen()
+                HistoryScreen(onOpenComplete = { id -> nav.navigate("preview/$id") })
             }
         }
     }
