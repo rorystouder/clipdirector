@@ -1,13 +1,19 @@
-# ClipDirector local dev stack.
-# AWS S3 is emulated by MinIO (PRD's Azurite was replaced by MinIO when the
-# storage backend was switched to AWS S3).
+# ClipDirector compose stack.
 #
-# Usage:
+# DEV MODE (default) — uses MinIO as a local S3 emulator:
 #   cd infra/compose
-#   cp ../../.env.example .env   # then fill in ANTHROPIC_API_KEY, OPENAI_API_KEY, JWT_SECRET
-#   docker compose --env-file .env build
+#   cp ../../.env.example .env   # fill in JWT_SECRET, ANTHROPIC_API_KEY, OPENAI_API_KEY
 #   docker compose --env-file .env up -d
 #   curl http://localhost:3000/health
+#
+# PROD MODE — talks to real AWS S3 (see docker-compose.prod.yml):
+#   docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# MinIO root credentials default to minioadmin/minioadmin. Override via
+# MINIO_ROOT_USER / MINIO_ROOT_PASSWORD in .env if needed. Do NOT reuse your
+# AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY — previously the compose file
+# borrowed those for MinIO root, which made real AWS keys silently double as
+# MinIO root creds (a foot-gun discovered during Phase 7 smoke).
 services:
   redis:
     image: redis:7-alpine
@@ -26,8 +32,9 @@ services:
     image: minio/minio:latest
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      # Dedicated MinIO creds — do not borrow AWS_ACCESS_KEY_ID / _SECRET.
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -45,7 +52,7 @@ services:
         condition: service_healthy
     entrypoint: >
       sh -c "
-        mc alias set local http://minio:9000 ${AWS_ACCESS_KEY_ID:-minioadmin} ${AWS_SECRET_ACCESS_KEY:-minioadmin} &&
+        mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin} &&
         mc mb --ignore-existing local/${AWS_S3_INPUT_BUCKET:-clipdirector-input} &&
         mc mb --ignore-existing local/${AWS_S3_OUTPUT_BUCKET:-clipdirector-output} &&
         echo 'buckets ready'
@@ -69,7 +76,12 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
       AWS_S3_INPUT_BUCKET: ${AWS_S3_INPUT_BUCKET:-clipdirector-input}
       AWS_S3_OUTPUT_BUCKET: ${AWS_S3_OUTPUT_BUCKET:-clipdirector-output}
-      AWS_S3_ENDPOINT: http://minio:9000
+      # AWS_S3_ENDPOINT is interpolated so users can override to a custom MinIO
+      # / LocalStack if needed. docker-compose.prod.yml clears it (literal "")
+      # to fall back to real AWS endpoints (literal YAML wins over interpolation).
+      AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT:-http://minio:9000}
+      # AWS_S3_FORCE_PATH_STYLE is dictated by the backend (MinIO=true, AWS=false).
+      # Hardcoded here for dev; prod override sets it to "false" for real AWS.
       AWS_S3_FORCE_PATH_STYLE: "true"
       JWT_SECRET: ${JWT_SECRET}
       DATABASE_FILE: /data/clipdirector.db
@@ -96,8 +108,8 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
       AWS_S3_INPUT_BUCKET: ${AWS_S3_INPUT_BUCKET:-clipdirector-input}
       AWS_S3_OUTPUT_BUCKET: ${AWS_S3_OUTPUT_BUCKET:-clipdirector-output}
-      AWS_S3_ENDPOINT: http://minio:9000
-      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT:-http://minio:9000}
+      AWS_S3_FORCE_PATH_STYLE: ${AWS_S3_FORCE_PATH_STYLE:-true}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
       ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-2000}
@@ -123,8 +135,8 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
       AWS_S3_INPUT_BUCKET: ${AWS_S3_INPUT_BUCKET:-clipdirector-input}
       AWS_S3_OUTPUT_BUCKET: ${AWS_S3_OUTPUT_BUCKET:-clipdirector-output}
-      AWS_S3_ENDPOINT: http://minio:9000
-      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT:-http://minio:9000}
+      AWS_S3_FORCE_PATH_STYLE: ${AWS_S3_FORCE_PATH_STYLE:-true}
       MUSIC_LIBRARY_PATH: /opt/clipdirector/music
       LOG_LEVEL: info
       NODE_ENV: production

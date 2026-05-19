@@ -1,0 +1,58 @@
+# ClipDirector PROD-mode compose override.
+#
+# Layered on top of docker-compose.yml to switch from MinIO (dev default) to
+# real AWS S3. Disables the minio + minio-init services and clears the
+# AWS_S3_ENDPOINT / AWS_S3_FORCE_PATH_STYLE env vars on the three app services
+# so the AWS SDK falls back to the public AWS S3 endpoints.
+#
+# Usage (from infra/compose/):
+#   docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Prereqs:
+#   - .env has real AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY for an IAM user
+#     scoped to AWS_S3_INPUT_BUCKET / AWS_S3_OUTPUT_BUCKET (e.g. clipdirector-app
+#     with GetObject/PutObject/DeleteObject on both buckets).
+#   - Those S3 buckets already exist in AWS with appropriate PAB / SSE /
+#     lifecycle. See Docs/phase7_smoke_test.md and PRD §16 Phase 8 for the
+#     bucket-provisioning walkthrough.
+#
+# Verification:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml config
+#   # → should show 3 services (api-gateway, orchestrator, render-worker) + redis,
+#   #   no minio, no minio-init, and empty AWS_S3_ENDPOINT.
+
+services:
+  # Disable MinIO services by parking them under a profile that nobody activates.
+  # Compose profiles default to inactive, so without --profile dev-only-minio
+  # the minio and minio-init containers will not be created.
+  minio:
+    profiles: ["dev-only-minio"]
+
+  minio-init:
+    profiles: ["dev-only-minio"]
+
+  # App services: clear the MinIO endpoint overrides so the SDK uses real AWS
+  # endpoints, and drop the minio-init dependency since that service no longer runs.
+  api-gateway:
+    environment:
+      AWS_S3_ENDPOINT: ""
+      AWS_S3_FORCE_PATH_STYLE: "false"
+    depends_on: !override
+      redis:
+        condition: service_healthy
+
+  orchestrator:
+    environment:
+      AWS_S3_ENDPOINT: ""
+      AWS_S3_FORCE_PATH_STYLE: "false"
+    depends_on: !override
+      redis:
+        condition: service_healthy
+
+  render-worker:
+    environment:
+      AWS_S3_ENDPOINT: ""
+      AWS_S3_FORCE_PATH_STYLE: "false"
+    depends_on: !override
+      redis:
+        condition: service_healthy

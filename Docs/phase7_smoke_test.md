@@ -211,3 +211,148 @@ If anything fails, capture:
 - The job's Redis status via `docker compose exec redis redis-cli HGETALL job:<jobId>`.
 
 Then we can decide whether to fix in Phase 7 or open a Phase 8 follow-up.
+
+---
+
+# Phase 8 — Prod-mode smoke test (real AWS S3)
+
+Same flow as Phase 7 but uses `docker-compose.prod.yml` to disable MinIO and target real AWS S3. **This costs real AWS dollars** — a few cents for the bucket ops, a few cents for the Claude API call. Negligible but not zero.
+
+## 13. Prereqs (in addition to Phase 7 prereqs)
+
+- [ ] AWS buckets exist and are correctly configured (per the AWS-bucket walkthrough — public-access-block, SSE, lifecycle). Defaults: `gain3d-clipdirector-input` and `gain3d-clipdirector-output` in `us-east-1`.
+- [ ] IAM user `clipdirector-app` exists with the scoped inline policy (`GetObject`/`PutObject`/`DeleteObject` on `/*` of both buckets, no ListBucket).
+- [ ] You have the `clipdirector-app` access keys saved.
+- [ ] `aws --profile clipdirector-app sts get-caller-identity` returns the right ARN (positive proof the keys still work).
+- [ ] You're prepared to do a Phase 7 dev-mode teardown first if a dev stack is currently running — port 3000 will conflict otherwise.
+
+## 14. Update `.env` for prod mode
+
+Edit `infra/compose/.env`:
+
+```bash
+# These MUST be the real clipdirector-app keys (not minioadmin):
+AWS_ACCESS_KEY_ID=AKIA...                       # clipdirector-app access key
+AWS_SECRET_ACCESS_KEY=<secret>                  # clipdirector-app secret
+
+# These MUST be the real bucket names (not the clipdirector-input default):
+AWS_S3_INPUT_BUCKET=gain3d-clipdirector-input
+AWS_S3_OUTPUT_BUCKET=gain3d-clipdirector-output
+
+# Leave these unset — the prod override clears them automatically:
+AWS_S3_ENDPOINT=
+AWS_S3_FORCE_PATH_STYLE=false
+```
+
+`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` are ignored in prod mode (MinIO doesn't run), so they don't matter.
+
+## 15. Verify the prod config before booting
+
+Sanity-check what compose will actually start, without spending build/start time:
+
+```bash
+docker compose --env-file .env \
+  -f docker-compose.yml -f docker-compose.prod.yml \
+  config --services
+```
+
+- [ ] Output shows exactly 4 services: `redis`, `api-gateway`, `orchestrator`, `render-worker`. **No `minio`, no `minio-init`.**
+
+Also check the env that will be passed to the app services:
+
+```bash
+docker compose --env-file .env \
+  -f docker-compose.yml -f docker-compose.prod.yml \
+  config | grep -E 'AWS_S3_(ENDPOINT|FORCE_PATH_STYLE):' | head
+```
+
+- [ ] Both should appear as empty strings (`AWS_S3_ENDPOINT: ""`, `AWS_S3_FORCE_PATH_STYLE: "false"`).
+
+## 16. Bring up the prod stack
+
+```bash
+docker compose --env-file .env \
+  -f docker-compose.yml -f docker-compose.prod.yml \
+  up -d
+
+docker compose --env-file .env \
+  -f docker-compose.yml -f docker-compose.prod.yml \
+  ps
+```
+
+- [ ] 4 containers running (no minio, no minio-init).
+- [ ] `compose-api-gateway-1` on port 3000.
+- [ ] No `Restarting` or `Exit 1`.
+
+## 17. End-to-end against real S3
+
+Mirror Phase 7 steps 6–10 (register, make clip, submit, poll, download). The only difference: output lands in real AWS S3, not MinIO.
+
+After the job completes, verify the artifacts in real AWS using the `rory-admin` profile (the `clipdirector-app` user intentionally lacks `ListBucket`):
+
+```bash
+aws --profile rory-admin s3 ls s3://gain3d-clipdirector-input/  --recursive
+aws --profile rory-admin s3 ls s3://gain3d-clipdirector-output/ --recursive
+```
+
+- [ ] Input bucket shows the uploaded clip(s) at `input/<userId>/<jobId>/...`.
+- [ ] Output bucket shows the rendered MP4 at `output/<userId>/<jobId>/output.mp4` with non-zero size.
+
+Download the output to validate:
+
+```bash
+aws --profile rory-admin s3 cp \
+  "s3://gain3d-clipdirector-output/<the-output-key>" /tmp/prod-output.mp4
+ffprobe -v error -show_entries format=duration,size,bit_rate /tmp/prod-output.mp4
+```
+
+- [ ] Valid MP4, expected duration, no ffprobe errors.
+
+Bonus: the presigned URL from `/jobs/:id/download` should now actually work from your host (it points to `https://gain3d-clipdirector-output.s3.amazonaws.com/...`, publicly resolvable). Test by curling it directly.
+
+## 18. Verify key rotation requires only a service restart (PRD item 58)
+
+```bash
+# Create new access keys
+aws --profile rory-admin iam create-access-key --user-name clipdirector-app
+# (copy the new AKIA... and SecretAccessKey into infra/compose/.env)
+
+# Restart just the app services — no rebuild needed
+docker compose --env-file .env \
+  -f docker-compose.yml -f docker-compose.prod.yml \
+  restart api-gateway orchestrator render-worker
+
+# Submit another job, verify it still completes (uses new keys)
+
+# Once verified, delete the old access key
+aws --profile rory-admin iam list-access-keys --user-name clipdirector-app
+aws --profile rory-admin iam delete-access-key \
+  --user-name clipdirector-app --access-key-id <OLD_AKIA_ID>
+```
+
+- [ ] Restart finishes in ~5s (no `docker compose build`).
+- [ ] Second job completes successfully.
+- [ ] Old key deleted; `list-access-keys` shows only one Active key.
+
+## 19. Prod-mode teardown
+
+```bash
+docker compose --env-file .env \
+  -f docker-compose.yml -f docker-compose.prod.yml \
+  down
+```
+
+No `-v` because there are no volumes worth wiping in prod mode (MinIO didn't run; api-gateway's SQLite is in a named volume, keep it for the next session).
+
+**Don't forget to clean up the S3 artifacts the smoke created** if you don't want them counting against your bill / lifecycle clock:
+
+```bash
+aws --profile rory-admin s3 rm s3://gain3d-clipdirector-input/  --recursive
+aws --profile rory-admin s3 rm s3://gain3d-clipdirector-output/ --recursive
+```
+
+(Or wait 7 days for the input lifecycle and 30 days for output to do it for you.)
+
+## What to capture for Phase 8
+
+If everything passes, append to `Docs/project_completion_summary.md` under a new Phase 8 entry: "Prod-mode smoke verified on YYYY-MM-DD against real AWS S3 buckets gain3d-clipdirector-input / -output."
