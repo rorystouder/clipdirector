@@ -277,3 +277,111 @@ The pipeline writes intermediate files to `${RENDER_TEMP_DIR}/${jobId}/work/{seg
 - Phase 5: api-gateway `GET /jobs/:jobId/download` already implemented in Phase 2; the **end-to-end test T-12** (POST /jobs → complete MP4 URL via polling) is the remaining Phase 5 deliverable. Requires both orchestrator and render-worker running against the same Redis.
 - Phase 6: error handling hardening (dead-letter processor, timeout budgets §11.3), tests T-13 + T-14.
 - Phase 7: Dockerfiles per §12.1, docker-compose per §12.2.
+
+---
+
+## 2026-05-19 — Phase 5: End-to-end test (complete)
+
+### Scope
+PRD Section 16 Phase 5 deliverable: test T-12. POST `/jobs` → orchestrator pulls and produces a manifest → render-worker produces an MP4 → `GET /jobs/:id` polls to `complete` → `GET /jobs/:id/download` returns a presigned URL that actually serves the MP4. All three services run in-process against shared real Redis + MinIO testcontainers.
+
+### Changes
+- `apps/orchestrator/package.json` and `apps/render-worker/package.json`: added `exports` maps so the test can `import { createOrchestratorWorker } from '@clipdirector/orchestrator/worker'` etc. without reaching into `dist/`. Only sub-paths actually consumed by the e2e test are exported; `./processor`, `./worker`, `./claude`, `./clips/*`, `./errors` for the orchestrator; `./processor`, `./worker`, `./music`, `./ffmpeg/runner`, `./errors` for the render-worker.
+- `apps/api-gateway/package.json`: added `@clipdirector/orchestrator` and `@clipdirector/render-worker` as **devDependencies** (workspace links). Production runtime of api-gateway does not import either; only the test process does. Keeping them in `devDependencies` means `pnpm deploy --prod` for the gateway image still leaves them out.
+- `apps/api-gateway/src/__tests__/e2e.test.ts` (new, 1 test):
+  - Spins one `redis:7-alpine` and one `minio/minio:latest` testcontainer.
+  - Creates input + output buckets, synthesizes two 3-second `lavfi testsrc + sine` clips and one `lavfi sine → libmp3lame` mp3 under `${tmp}/music/energetic/`.
+  - Builds the api-gateway via `createApp({...})` against the same Redis + Storage.
+  - Wires an `orchestratorWorker` and a `renderWorker` in-process. **Claude is stubbed** (returns a fixed valid manifest); the rest is real: real downloader, real ffmpeg frame sampler, real `runRenderPipeline`, real S3 upload, real presigned URL.
+  - Registers a user, POSTs a multipart `/jobs` request with both clip buffers, polls `/jobs/:id` every 500ms until `complete`, requests `/jobs/:id/download`, then `fetch()`es the presigned URL and asserts the body starts with an MP4 `ftyp` box at offset 4.
+
+### Verification
+- `pnpm -r build` — clean.
+- `pnpm -r test` — **67/67 passing**. T-12 finishes in ~3s (clip synthesis + full pipeline) on the dev host.
+- The MP4 actually plays: the body fetched from the presigned URL is > 1 KB and the bytes at offsets 4–8 match `ftyp`.
+
+### Surface items / notes
+- The test stubs Claude. The Phase 3 orchestrator integration test already exercised a real `messages.create` code path against a recorded request shape; this T-12 covers the *gateway → worker → output → download* glue, not Claude itself.
+- `defaultJobOptions.attempts: 1` is set on both queues inside the e2e test so a transient failure doesn't silently retry under us mid-poll. The retry path is covered by T-13/T-14 (Phase 6).
+- Workspace `exports` maps mean the production build for orchestrator + render-worker now ships `.d.ts` for these sub-paths. `tsc --build` already emits them; no change to the build command.
+
+---
+
+## 2026-05-19 — Phase 6: Timeout budgets, retries, and DLQ (complete)
+
+### Scope
+PRD Section 16 Phase 6: per-step timeout budgets §11.3, BullMQ retry behavior that doesn't prematurely mark a job `failed` on intermediate attempts, and a dead-letter processor that reconciles BullMQ's failed-jobs list with the Redis `JobStatusRecord`. Tests T-13 (Claude timeout) and T-14 (FFmpeg failure).
+
+### Timeout budgets (§11.3)
+- `packages/shared-types/src/timeout.ts` (new) — `TimeoutError` class (carries `label` + `ms`), `withTimeout(promise, ms, label)` utility (Promise.race + `clearTimeout` in `finally`), and a `TIMEOUTS` constant table. Re-exported from `packages/shared-types/src/index.ts`.
+- Budgets per PRD §11.3:
+  - `clipDownloadMs`: 60s (per clip)
+  - `frameSamplingMs`: 120s
+  - `transcriptionMs`: 180s
+  - `claudeApiMs`: 60s
+  - `manifestValidationMs`: 5s
+  - `renderPipelineMs`: 300s (full §8.2 pipeline)
+  - `outputUploadMs`: 120s
+  - `totalJobMs`: 600s
+- Wired in:
+  - `apps/orchestrator/src/claude/client.ts` — `client.messages.create(...)` wrapped in `withTimeout(..., TIMEOUTS.claudeApiMs, 'claude-api')`.
+  - `apps/render-worker/src/processor.ts` — per-clip download, pipeline, and upload each wrapped with their own budget + label (`clip-download[i]`, `render-pipeline`, `output-upload`).
+
+### Retry-aware worker error handling
+Previously: any throw in either worker set Redis status to `failed` immediately and then rethrew. That broke BullMQ's retry semantics — the first attempt's failure looked terminal to clients even though BullMQ would re-run the job.
+
+- `apps/orchestrator/src/worker.ts` and `apps/render-worker/src/worker.ts` — both now check `attemptsMade + 1 >= job.opts.attempts ?? 1` and **only write `status: 'failed'` on the final attempt**. Intermediate failures log as `"attempt failed, will retry"`; the terminal failure logs as `"failed (no retries left)"`. Both still rethrow so BullMQ controls the retry/backoff.
+- This matches the PRD §11 expectation that transient failures are invisible to API consumers below the BullMQ retry count.
+
+### Dead-letter processor
+- `apps/api-gateway/src/dlq/processor.ts` (new) — `createDlqProcessor({ redis, queues, logger, intervalMs?, maxFailedAgeMs? })`:
+  - Polls `queue.getFailed(0, 999)` on each tick (default 10 min).
+  - For every BullMQ-failed job: if the `JobStatusRecord` for `data.jobId` isn't already `failed`, write it (uses `setJobStatus` so `updatedAt` and 7-day TTL behave normally). Belt-and-suspenders against any path where the worker died before writing the terminal status.
+  - Prunes failed jobs older than `maxFailedAgeMs` (default 48h) from BullMQ via `job.remove()`.
+  - Exposes `runOnce()` (sync, returns `{markedFailed, pruned}`) for tests, plus `start()`/`stop()` for the production interval.
+- Wired in `apps/api-gateway/src/index.ts` against both the orchestrator and render queues; `stop()` is called on `SIGTERM`/`SIGINT` shutdown.
+
+### Tests (3 new, 67 total)
+- `apps/api-gateway/src/__tests__/retries-dlq.test.ts`:
+  - **T-13** — A `ClaudeClient` stub that always throws `new TimeoutError('claude-api', 60_000)`. Orchestrator queue is set to `attempts: 3, backoff: { type: 'fixed', delay: 100 }`. After enqueueing one job: Claude is called exactly 3 times, the Redis status reaches `failed` with an error message containing `timeout`/`timed out`, and the DLQ processor (running with a 200ms interval) is observed reconciling. Uses a real ffmpeg `lavfi testsrc` clip uploaded to MinIO so the orchestrator gets past the download + frame-sampling stages before hitting the stubbed Claude.
+  - **T-14** — Render queue set to `attempts: 2`. Input "clip" is deliberately corrupt bytes (`writeFile(corrupt, "this is not a video file…")`). FFmpeg trim step exits non-zero on both attempts; final Redis status is `failed`; DLQ tick observes the failure and reconciles.
+- The existing 26 api-gateway tests + the new T-12 e2e + the two new retries-dlq tests → **29 api-gateway tests**; total repo **67/67**.
+
+### Verification
+- `pnpm -r build` — clean.
+- `pnpm -r test` — **67/67 passing** (queue-client 8 + storage-client 9 + orchestrator 17 + render-worker 4 + api-gateway 29).
+
+### Surface items / notes
+- **`removeOnFail: false`** is required on both queues for the DLQ processor to actually see the failed jobs. The Phase 5 e2e queues use `attempts: 1` and don't enable this; production wiring in `apps/api-gateway/src/index.ts` will need its queue defaults reviewed before this goes live.
+- **DLQ is single-process.** Multiple api-gateway instances would each tick independently and double-report. Either pin DLQ to a leader (Redlock / single replica), or move the responsibility to a dedicated worker. Not a problem at MVP scale.
+- **Per-clip download timeout is per clip, not aggregate.** A manifest with 12 clips could legally stall the orchestrator for up to 12 × 60s = 12 min on downloads alone. Acceptable for now; if needed, wrap the loop with `TIMEOUTS.totalJobMs`.
+- **`TimeoutError` is not retried selectively.** BullMQ retries on *any* throw including programmer errors. If we ever want to fail-fast on permanent errors (`ManifestParseError`, validator errors after the single allowed retry), the worker should classify before rethrowing. Open item.
+
+---
+
+## 2026-05-19 — Phase 7: Dockerfiles + docker-compose (unverified)
+
+### Scope
+PRD Section 16 Phase 7 (steps 37–41): per-service Dockerfiles §12.1 and a docker-compose for local dev §12.2.
+
+### Files
+- `.dockerignore` — excludes `node_modules`, `dist`, `.next`, `.git`, `.env*` (except `.env.example`), `Zone.Identifier` cruft, IDE dirs, `Docs/`, all `*.md` except top-level `README.md`, and `apps/android`. Keeps the build context small and prevents host `node_modules` from poisoning the in-image install.
+- `infra/docker/api-gateway.Dockerfile` — `node:20-alpine` builder + runtime, no ffmpeg. Uses `corepack enable` for pnpm, `pnpm install --frozen-lockfile` with a BuildKit cache mount on `~/.pnpm-store`, `pnpm -r build`, then `pnpm deploy --filter @clipdirector/api-gateway --prod /deploy` to extract the prod-only tree. `tini` as PID 1.
+- `infra/docker/orchestrator.Dockerfile` — `node:20` (Debian) builder, `ubuntu:24.04` runtime with `ffmpeg` + `ffprobe` from apt and nodejs from nodesource. Sets `FFMPEG_PATH` / `FFPROBE_PATH` envs for the frame-sampler.
+- `infra/docker/render-worker.Dockerfile` — same shape as orchestrator plus `fonts-dejavu-core` for drawtext, with `FONT_FILE=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf` and `MUSIC_LIBRARY_PATH=/opt/clipdirector/music`.
+- `infra/compose/docker-compose.yml` — Redis + MinIO + `minio-init` (mc, creates the input/output buckets) + the three app services. Bind-mounts `./music` into the render-worker at `/opt/clipdirector/music`. `depends_on` uses healthchecks for Redis and `service_completed_successfully` for the bucket-init step.
+
+### Verification status
+- `pnpm -r build` and `pnpm -r test` still pass (Dockerfiles are not in the build/test paths).
+- `docker build` and `docker compose up` — **NOT YET RUN.** Per the global "always manually test by me before closing bugs" rule, this stays open until the user smoke-tests the stack locally.
+
+### Surface items / open
+- The orchestrator/render-worker runtime images are Ubuntu, not Alpine, because `node-gyp` + the Anthropic/OpenAI SDKs build cleaner against glibc. This costs ~150 MB per image vs. an Alpine equivalent; acceptable for dev/staging, worth revisiting before production.
+- `pnpm deploy --prod` removes `devDependencies` from the deployed tree. The api-gateway image therefore does **not** include `@clipdirector/orchestrator` or `@clipdirector/render-worker` (those are dev-only deps used by the e2e test). Good.
+- `ANTHROPIC_MODEL` defaults to `claude-sonnet-4-20250514` in compose, matching the PRD. Override at deploy time to a current model id (e.g. `claude-sonnet-4-6`).
+- Compose does not expose Redis or MinIO over TLS — local dev only.
+
+### Open / Next
+- Manual smoke test of `docker compose --env-file .env up -d` against a `JWT_SECRET`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`. Confirm `/health` is green, POST `/auth/register` works, POST `/jobs` runs through to a downloadable MP4.
+- Add at least one royalty-free track per mood under `music/<mood>/`. CI synthesizes its own; production needs real assets.
+- Phase 8 (observability) and Phase 9 (Android wiring) per the PRD checklist.
