@@ -1,0 +1,136 @@
+# ClipDirector local dev stack.
+# AWS S3 is emulated by MinIO (PRD's Azurite was replaced by MinIO when the
+# storage backend was switched to AWS S3).
+#
+# Usage:
+#   cd infra/compose
+#   cp ../../.env.example .env   # then fill in ANTHROPIC_API_KEY, OPENAI_API_KEY, JWT_SECRET
+#   docker compose --env-file .env build
+#   docker compose --env-file .env up -d
+#   curl http://localhost:3000/health
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes: ["minio-data:/data"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        mc alias set local http://minio:9000 ${AWS_ACCESS_KEY_ID:-minioadmin} ${AWS_SECRET_ACCESS_KEY:-minioadmin} &&
+        mc mb --ignore-existing local/${AWS_S3_INPUT_BUCKET:-clipdirector-input} &&
+        mc mb --ignore-existing local/${AWS_S3_OUTPUT_BUCKET:-clipdirector-output} &&
+        echo 'buckets ready'
+      "
+
+  api-gateway:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api-gateway.Dockerfile
+    image: clipdirector/api-gateway:dev
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      AWS_S3_INPUT_BUCKET: ${AWS_S3_INPUT_BUCKET:-clipdirector-input}
+      AWS_S3_OUTPUT_BUCKET: ${AWS_S3_OUTPUT_BUCKET:-clipdirector-output}
+      AWS_S3_ENDPOINT: http://minio:9000
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      JWT_SECRET: ${JWT_SECRET}
+      DATABASE_FILE: /data/clipdirector.db
+      LOG_LEVEL: info
+      NODE_ENV: production
+    ports: ["3000:3000"]
+    volumes: ["api-gateway-data:/data"]
+
+  orchestrator:
+    build:
+      context: ../..
+      dockerfile: infra/docker/orchestrator.Dockerfile
+    image: clipdirector/orchestrator:dev
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      AWS_S3_INPUT_BUCKET: ${AWS_S3_INPUT_BUCKET:-clipdirector-input}
+      AWS_S3_OUTPUT_BUCKET: ${AWS_S3_OUTPUT_BUCKET:-clipdirector-output}
+      AWS_S3_ENDPOINT: http://minio:9000
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
+      ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-2000}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LOG_LEVEL: info
+      NODE_ENV: production
+
+  render-worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/render-worker.Dockerfile
+    image: clipdirector/render-worker:dev
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      AWS_S3_INPUT_BUCKET: ${AWS_S3_INPUT_BUCKET:-clipdirector-input}
+      AWS_S3_OUTPUT_BUCKET: ${AWS_S3_OUTPUT_BUCKET:-clipdirector-output}
+      AWS_S3_ENDPOINT: http://minio:9000
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      MUSIC_LIBRARY_PATH: /opt/clipdirector/music
+      LOG_LEVEL: info
+      NODE_ENV: production
+    volumes:
+      - ../../music:/opt/clipdirector/music:ro
+      - render-tmp:/tmp/clipdirector
+
+volumes:
+  redis-data: {}
+  minio-data: {}
+  api-gateway-data: {}
+  render-tmp: {}
