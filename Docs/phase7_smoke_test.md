@@ -288,11 +288,11 @@ docker compose --env-file .env \
 
 Mirror Phase 7 steps 6–10 (register, make clip, submit, poll, download). The only difference: output lands in real AWS S3, not MinIO.
 
-After the job completes, verify the artifacts in real AWS using the `rory-admin` profile (the `clipdirector-app` user intentionally lacks `ListBucket`):
+After the job completes, verify the artifacts in real AWS using your admin AWS CLI profile (named `admin` in the examples below — substitute whatever you called yours when running `aws configure --profile <name>`). The `clipdirector-app` user intentionally lacks `ListBucket`, so it cannot run these commands:
 
 ```bash
-aws --profile rory-admin s3 ls s3://gain3d-clipdirector-input/  --recursive
-aws --profile rory-admin s3 ls s3://gain3d-clipdirector-output/ --recursive
+aws --profile admin s3 ls s3://gain3d-clipdirector-input/  --recursive
+aws --profile admin s3 ls s3://gain3d-clipdirector-output/ --recursive
 ```
 
 - [ ] Input bucket shows the uploaded clip(s) at `input/<userId>/<jobId>/...`.
@@ -301,7 +301,7 @@ aws --profile rory-admin s3 ls s3://gain3d-clipdirector-output/ --recursive
 Download the output to validate:
 
 ```bash
-aws --profile rory-admin s3 cp \
+aws --profile admin s3 cp \
   "s3://gain3d-clipdirector-output/<the-output-key>" /tmp/prod-output.mp4
 ffprobe -v error -show_entries format=duration,size,bit_rate /tmp/prod-output.mp4
 ```
@@ -314,7 +314,7 @@ Bonus: the presigned URL from `/jobs/:id/download` should now actually work from
 
 ```bash
 # Create new access keys
-aws --profile rory-admin iam create-access-key --user-name clipdirector-app
+aws --profile admin iam create-access-key --user-name clipdirector-app
 # (copy the new AKIA... and SecretAccessKey into infra/compose/.env)
 
 # Restart just the app services — no rebuild needed
@@ -325,8 +325,8 @@ docker compose --env-file .env \
 # Submit another job, verify it still completes (uses new keys)
 
 # Once verified, delete the old access key
-aws --profile rory-admin iam list-access-keys --user-name clipdirector-app
-aws --profile rory-admin iam delete-access-key \
+aws --profile admin iam list-access-keys --user-name clipdirector-app
+aws --profile admin iam delete-access-key \
   --user-name clipdirector-app --access-key-id <OLD_AKIA_ID>
 ```
 
@@ -347,8 +347,8 @@ No `-v` because there are no volumes worth wiping in prod mode (MinIO didn't run
 **Don't forget to clean up the S3 artifacts the smoke created** if you don't want them counting against your bill / lifecycle clock:
 
 ```bash
-aws --profile rory-admin s3 rm s3://gain3d-clipdirector-input/  --recursive
-aws --profile rory-admin s3 rm s3://gain3d-clipdirector-output/ --recursive
+aws --profile admin s3 rm s3://gain3d-clipdirector-input/  --recursive
+aws --profile admin s3 rm s3://gain3d-clipdirector-output/ --recursive
 ```
 
 (Or wait 7 days for the input lifecycle and 30 days for output to do it for you.)

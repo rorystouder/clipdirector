@@ -390,5 +390,48 @@ PRD Section 16 Phase 7 (steps 37–41): per-service Dockerfiles §12.1 and a doc
 
 ### Open / Next
 - Add at least one royalty-free track per mood under `music/<mood>/`. CI synthesizes its own; production needs real assets.
-- Phase 8 (production deployment mode — see PRD amendment items 51-58): separate dev-mode MinIO from prod-mode real S3, then re-run the smoke against `gain3d-clipdirector-*` directly.
 - Phase 9 (Android wiring) per the PRD checklist.
+
+---
+
+## 2026-05-19 — Phase 8: Production deployment mode (verified end-to-end)
+
+### Scope
+PRD §16 Phase 8 items 51-58 (the amendment added earlier the same day after the "AWS buckets standing by" walkthrough). Option B chosen: a `docker-compose.prod.yml` override that flips the dev MinIO stack to real AWS S3 without forking the base compose file.
+
+### Implementation (items 51-55)
+- **Base file (`infra/compose/docker-compose.yml`)**:
+  - `AWS_S3_ENDPOINT` becomes `${AWS_S3_ENDPOINT:-http://minio:9000}` so users can override per .env, but defaults to MinIO for dev. Prod override sets it to literal empty string which wins over the interpolation default.
+  - `AWS_S3_FORCE_PATH_STYLE` hardcoded to `"true"` in the base — dictated by backend, not user-choice. Prod override flips it to `"false"`.
+  - MinIO root credentials moved to dedicated `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` vars (default `minioadmin`/`minioadmin`) instead of borrowing `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. Closes the Phase 7 smoke foot-gun where real AWS keys silently doubled as MinIO root.
+  - `minio-init` mc-alias step uses `MINIO_ROOT_*` instead of `AWS_*`.
+- **New override (`infra/compose/docker-compose.prod.yml`)**:
+  - Disables `minio` + `minio-init` via `profiles: ["dev-only-minio"]` (a profile that nobody activates, so the services don't run by default in prod mode).
+  - Clears `AWS_S3_ENDPOINT` to `""` and `AWS_S3_FORCE_PATH_STYLE` to `"false"` on the three app services.
+  - Replaces each app service's `depends_on` via `!override` (compose 2.24+ directive) so only `redis` remains — no minio-init dependency since it doesn't run.
+- **`.env.example`** documents the dev-vs-prod env layout and adds the new `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` section. Notes that `AWS_S3_FORCE_PATH_STYLE` is not user-overridable.
+- **`Docs/phase7_smoke_test.md`** appends a "Phase 8 — Prod-mode smoke test" section (steps 13-19) mirroring the dev flow but targeting the real `gain3d-clipdirector-*` buckets, with the IAM key rotation step (item 58) and explicit S3 cleanup instructions.
+
+### Verification (items 56-58, all live)
+
+**Item 56 — prod-mode boot.** `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` brought up exactly four containers (`redis`, `api-gateway`, `orchestrator`, `render-worker`). No `minio`, no `minio-init`. `/health` returned 200, redis ok, queues at zero. Boot logs showed clean startup with no AccessDenied / InvalidAccessKey errors (no S3 traffic happens during init).
+
+**Item 57 — real-S3 end-to-end.** Submitted a job through the prod gateway with two synthesized silent test clips. Pipeline progressed `sampling 10 → reasoning 30 → rendering 60 → complete 100` in ~6 seconds. `outputUrl` from `GET /jobs/:id` was `s3://gain3d-clipdirector-output/output/.../output.mp4` — real bucket. The presigned URL from `GET /jobs/:id/download` was `https://gain3d-clipdirector-output.s3.us-east-1.amazonaws.com/...` and **fetched cleanly from the host** — the dev-mode `minio:9000` host-resolution hang doesn't recur in prod mode, as predicted. Downloaded MP4 was 212933 bytes, duration 6.018s, valid `ftyp isom` header. `aws s3 ls` against both buckets confirmed both input clips (`input/<userId>/<jobId>/clip_00`, `clip_01`) and the rendered output existed in real AWS.
+
+**Item 58 — key rotation via restart.** Created a new IAM access key for `clipdirector-app` via `aws iam create-access-key`, swapped it into `.env` via `perl -i -pe` (so the secret never echoed to the terminal), and ran `docker compose restart api-gateway orchestrator render-worker`. **Restart completed in 1 second** — no `Building` step, no image rebuild, exactly as the Dockerfile review predicted (no `ARG`, no `AWS_` build-time refs, no `.env` COPY). Submitted a second job through the gateway on the new key — completed end-to-end with the same `~6s sampling→reasoning→rendering→complete` progression. Deleted the old key via `aws iam delete-access-key`; `list-access-keys` confirmed only the new key remained Active. **Key rotation requires neither rebuild nor downtime beyond a sub-second restart.**
+
+### Mid-flight observations
+- **Compose override semantics.** `!reset` removes an attribute entirely; `!override` replaces it. My first cut used `!reset` to clear `depends_on` and provide a new value — the new value was silently dropped, leaving `depends_on` empty. Switched to `!override` and it worked. Worth remembering for any future compose-overlay work.
+- **`${VAR-default}` vs `${VAR:-default}`.** Single-dash defaults only on unset; colon-dash defaults on unset OR empty. Since `.env.example` sets some vars to empty strings, must use colon-dash everywhere we want a meaningful default to kick in.
+- **AWS_S3_FORCE_PATH_STYLE removed from user override.** Originally interpolated, but the value is purely a function of which storage backend you're talking to (MinIO → true, AWS → false) — there's no scenario where a user override makes sense. Pinned in base file, overridden in prod file. Simpler.
+- **AWS CLI profile name in the smoke doc** said `--profile rory-admin`; the local profile is actually named `admin`. Patched the doc.
+
+### Cost / artifacts of the smoke
+- 2 Claude `messages.create` calls (input was ~10 KB of base64 frames each, output ~2 KB JSON manifest). Probably well under $0.10 total.
+- 4 input clips + 2 output MP4s briefly in S3 (~500 KB total). Cleaned up immediately via `aws s3 rm --recursive` so the bucket lifecycle wasn't needed.
+- No persistent state left in AWS beyond the IAM user/policy/active key from the original walkthrough.
+
+### Open / Next
+- Phase 9 (Android wiring) per the PRD checklist.
+- Bump Dockerfile base images from `node:20` to `node:22` before January 2027 (AWS SDK v3 deprecation warning).
+- Add at least one royalty-free track per mood under `music/<mood>/` for real music wiring.
