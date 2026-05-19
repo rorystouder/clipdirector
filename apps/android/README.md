@@ -1,20 +1,56 @@
 # ClipDirector — Android Client
 
-Phase 0 created the scaffold (Kotlin + Compose + Retrofit + ExoPlayer dependencies, five screen stubs, `ClipDirectorApi` interface). **Phase 9** (PRD items 59-66) is the toolchain + build-verification work that gets the scaffold compiling against a real Android SDK. Actual screen implementation is deferred to a future Phase 10 amendment.
+End-to-end Kotlin + Compose client for the ClipDirector backend. Implements registration, login, video picking, job submission with upload progress, status polling, ExoPlayer playback of the rendered MP4, and a history list of past jobs. Talks to the gateway built in Phases 0-8.
 
-## What's here
+## What's here (Phase 10 complete)
 
-- Gradle 8.5 + AGP 8.5 + Kotlin 1.9.24 + Compose BOM 2024.06.
-- Five screen stubs (`ClipSelect`, `Prompt`, `Processing`, `Preview`, `History`), wired into a minimal NavHost.
-- `ClipDirectorApi` Retrofit interface matching `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/download`.
-- Dependencies declared for: Retrofit + OkHttp, kotlinx.serialization, Media3 ExoPlayer, Coil.
+- Kotlin 2.0.21 + AGP 8.5 + Compose BOM 2024.06 + Material3.
+- Hand-rolled DI (`AppContainer` / ServiceLocator pattern — no Hilt at this scale).
+- Two-OkHttpClient design: unauthed for `/auth/refresh`, authed (Bearer interceptor + 401-refresh `Authenticator`) for everything else.
+- DataStore-backed `TokenStore` (access + refresh + email) and `JobIdStore` (history list, 100 cap).
+- Five screens fully implemented: `ClipSelect` (PhotoPicker, 1–12 clips), `Prompt` (form + multipart submit with progress), `Processing` (2s polling), `Preview` (ExoPlayer in DisposableEffect + share), `History` (DataStore-backed, hydrated against gateway).
+- New auth screens (`Login`, `Register`) plus auth-gated NavHost.
+- 20 unit tests (MockWebServer + Turbine + TestDispatcher); ./gradlew :app:assembleDebug and :app:lintDebug both clean.
 
-## What's still missing (Phase 10+)
+## Run the app
 
-- ViewModels, repository layer, DI.
-- Real MediaStore integration, ExoPlayer playback, upload progress.
-- Auth flow (register / login / refresh-token rotation).
-- History persistence.
+### Prereqs
+- JDK 17, Android SDK 34, `local.properties`, gradle wrapper (all per the Phase 9 walkthrough below).
+- The gateway running locally: from repo root, `cd infra/compose && docker compose --env-file .env up -d`. Confirm `curl http://localhost:3000/health` returns 200.
+
+### Pick an Android target
+
+**Emulator (Android 13+ recommended):** The debug build hardcodes `API_BASE_URL=http://10.0.2.2:3000/` — that's the special emulator address pointing at the host's `localhost`. Just install and run, no extra config.
+
+```bash
+cd apps/android
+./gradlew :app:installDebug
+adb shell am start -n ai.clipdirector/.MainActivity
+```
+
+**Real device (USB-debugging or wireless):** The device doesn't know about `10.0.2.2`. Use `adb reverse` to forward the device's port 3000 to your laptop's port 3000:
+
+```bash
+adb reverse tcp:3000 tcp:3000
+./gradlew :app:installDebug
+```
+
+The app still uses `http://10.0.2.2:3000/` — that hostname resolves via the reverse mapping to your laptop. Disconnect = mapping gone, app loses gateway.
+
+### Smoke test (manual, 2 minutes)
+
+1. Open the app — it should start at the Login screen.
+2. Tap "Don't have an account? Register" → enter `e2e@example.com` + 12+ char password → "Create account". App should navigate to Clip Select.
+3. Tap "Pick videos" → PhotoPicker → select 1–2 short videos. Thumbnails should appear with durations.
+4. Tap "Next" → on Prompt screen, type a prompt like `snappy 6 second highlight cut`, leave platform/mood/style at defaults → "Submit".
+5. Upload progress bar should fill. App navigates to Processing screen, showing status text + percentage. Sub-15 seconds total against a local docker stack.
+6. On completion, app navigates to Preview. ExoPlayer should auto-play the rendered MP4. Try the "Share download link" button.
+7. Tap "Make another" → back to Clip Select. Verify History row in the nav (or however you've exposed it) shows the just-completed job.
+8. Force-stop the app (`adb shell am force-stop ai.clipdirector`) and re-open → should still be logged in (TokenStore persists). History should still show the past job (JobIdStore persists).
+
+### Reading logs
+
+`adb logcat -s ai.clipdirector:V` for app logs. The OkHttp logging interceptor is on in debug builds, so every request + response (including bodies — beware secrets in shared screenshots) is logged.
 
 ---
 
@@ -152,14 +188,17 @@ From this point on, anyone cloning the repo can `cd apps/android && ./gradlew :a
 | `Could not resolve all dependencies` (com.android.application) | Behind a corporate proxy | Set `gradle.properties`: `systemProp.http.proxyHost=...` etc. |
 | `JAVA_HOME` not set or wrong on later shell sessions | rc file not sourced | Verify the export lines are in `~/.bashrc`/`~/.zshrc` and restart the shell |
 
-## Future work (Phase 10+)
+## Future work (Phase 11+)
 
-The actual app is unimplemented — every screen file has `// TODO Phase 2` placeholders. Phase 10 should:
+Phase 10 ships a usable client but deliberately defers production-grade resilience:
 
-- Implement the auth flow against the gateway (`/auth/register`, `/auth/login`, refresh-token rotation).
-- Wire `ClipSelectScreen` to MediaStore for picking up to 12 video clips.
-- Implement upload via Retrofit multipart, with progress feedback.
-- Implement polling in `ProcessingScreen` against `GET /jobs/:id`.
-- Implement `PreviewScreen` with ExoPlayer playing the presigned-download MP4.
-- Persist job history locally (Room) and render `HistoryScreen` against it.
-- Add ViewModels + a small DI layer (Hilt or manual).
+- **WorkManager + foreground service for upload resilience under process death.** Today, if the app is force-killed or backgrounded mid-upload, the upload aborts. A `OneTimeWorkRequest` with `setExpedited` would survive that. Biggest gap.
+- **Push notifications for job completion** — currently the user has to keep the app open or come back and check.
+- **Multi-account / account switcher** — `TokenStore` holds one set of tokens.
+- **Tablet / landscape-specific layouts** — Compose default scaling works but isn't tuned.
+- **Crashlytics / analytics** — no instrumentation today.
+- **ProGuard/R8 release-mode optimization** — `isMinifyEnabled = false` in `release` buildType; needs rules + audit before shipping.
+- **Localization / RTL** — strings inlined, English only.
+- **Accessibility audit beyond Compose defaults.**
+- **Bump deps** — lint flags newer versions of `activity-compose`, `navigation-compose`, `lifecycle-*`, `datastore-preferences`, `security-crypto`, `media3-*`. None urgent, all worth picking up in a maintenance pass.
+- **Android 14 partial-access UX for Selected Photos Access.** Out of scope because we use PhotoPicker which sidesteps the partial-grant flow; revisit if we ever query MediaStore directly.
