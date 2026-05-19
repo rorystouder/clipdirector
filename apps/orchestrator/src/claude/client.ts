@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { RenderJobInput } from '@clipdirector/shared-types';
+import { TIMEOUTS, withTimeout } from '@clipdirector/shared-types';
 import { ManifestParseError } from '../errors.js';
 import {
   EDIT_MANIFEST_SCHEMA_EXAMPLE,
@@ -40,12 +41,16 @@ export function createClaudeClient(config: ClaudeClientConfig): ClaudeClient {
     async callReasoning(params: ReasoningParams): Promise<unknown> {
       const userMessage = buildUserMessage(params);
 
-      const response = await client.messages.create({
-        model: config.model,
-        max_tokens: config.maxTokens,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: userMessage }],
-      });
+      const response = await withTimeout(
+        client.messages.create({
+          model: config.model,
+          max_tokens: config.maxTokens,
+          system: SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userMessage }],
+        }),
+        TIMEOUTS.claudeApiMs,
+        'claude-api',
+      );
 
       const textBlock = response.content.find((b) => b.type === 'text');
       if (!textBlock || textBlock.type !== 'text') {

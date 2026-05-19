@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { Redis } from 'ioredis';
 import type { RenderJobPayload } from '@clipdirector/shared-types';
 import { setJobStatus } from '@clipdirector/queue-client';
+import { TIMEOUTS, withTimeout } from '@clipdirector/shared-types';
 import type { StorageClient } from '@clipdirector/storage-client';
 import type { Logger } from '@clipdirector/logger';
 import { runRenderPipeline } from './ffmpeg/pipeline.js';
@@ -47,12 +48,16 @@ export async function renderJob(
     await setJobStatus(deps.redis, { jobId: payload.jobId, status: 'rendering', progress: 50 });
     await mkdir(jobTempDir, { recursive: true });
 
-    // Download all clips
+    // Download all clips with a per-clip timeout (§11.3).
     const localClipPaths: string[] = [];
     for (let i = 0; i < payload.clipUrls.length; i++) {
       const { bucket, key } = parseS3Uri(payload.clipUrls[i]!);
       const localPath = path.join(jobTempDir, `clip_${String(i).padStart(2, '0')}.mp4`);
-      await deps.storage.download(bucket, key, localPath);
+      await withTimeout(
+        deps.storage.download(bucket, key, localPath),
+        TIMEOUTS.clipDownloadMs,
+        `clip-download[${i}]`,
+      );
       localClipPaths.push(localPath);
     }
     log.info({ count: localClipPaths.length }, 'clips downloaded');
@@ -66,29 +71,37 @@ export async function renderJob(
     );
     log.info({ mood: payload.manifest.musicMood, musicPath }, 'music selected');
 
-    // Run pipeline
-    const finalMp4 = await runRenderPipeline(
-      {
-        jobId: payload.jobId,
-        manifest: payload.manifest,
-        localClipPaths,
-        workDir: path.join(jobTempDir, 'work'),
-        musicPath,
-        ...(deps.fontFile ? { fontFile: deps.fontFile } : {}),
-      },
-      { ffmpeg: deps.ffmpeg },
+    // Run pipeline under the full-render budget (§11.3).
+    const finalMp4 = await withTimeout(
+      runRenderPipeline(
+        {
+          jobId: payload.jobId,
+          manifest: payload.manifest,
+          localClipPaths,
+          workDir: path.join(jobTempDir, 'work'),
+          musicPath,
+          ...(deps.fontFile ? { fontFile: deps.fontFile } : {}),
+        },
+        { ffmpeg: deps.ffmpeg },
+      ),
+      TIMEOUTS.renderPipelineMs,
+      'render-pipeline',
     );
     await setJobStatus(deps.redis, { jobId: payload.jobId, progress: 92 });
 
-    // Upload
+    // Upload under the output-upload budget (§11.3).
     const { bucket, key } = parseS3Uri(payload.outputBlobPath);
     await setJobStatus(deps.redis, { jobId: payload.jobId, status: 'uploading', progress: 95 });
-    const outputUri = await deps.storage.upload({
-      bucket,
-      key,
-      filePath: finalMp4,
-      contentType: 'video/mp4',
-    });
+    const outputUri = await withTimeout(
+      deps.storage.upload({
+        bucket,
+        key,
+        filePath: finalMp4,
+        contentType: 'video/mp4',
+      }),
+      TIMEOUTS.outputUploadMs,
+      'output-upload',
+    );
 
     const stats = await (await import('node:fs/promises')).stat(finalMp4);
 

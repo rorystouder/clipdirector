@@ -1,9 +1,10 @@
 import { createLogger } from '@clipdirector/logger';
 import { apiGatewayEnvSchema, validateEnv } from '@clipdirector/shared-types';
-import { createOrchestratorQueue, createRedisClient, getRedisConnection } from '@clipdirector/queue-client';
+import { createOrchestratorQueue, createRedisClient, createRenderQueue, getRedisConnection } from '@clipdirector/queue-client';
 import { StorageClient } from '@clipdirector/storage-client';
 import { createApp } from './app.js';
 import { openDatabase } from './db.js';
+import { createDlqProcessor } from './dlq/processor.js';
 
 const log = createLogger('api-gateway');
 
@@ -13,7 +14,15 @@ async function main(): Promise<void> {
   const db = openDatabase(env.DATABASE_FILE);
   const redis = createRedisClient();
   const orchestratorQueue = createOrchestratorQueue(getRedisConnection());
+  const renderQueue = createRenderQueue(getRedisConnection());
   const storage = new StorageClient();
+
+  const dlq = createDlqProcessor({
+    redis,
+    queues: [orchestratorQueue, renderQueue],
+    logger: log,
+  });
+  dlq.start();
 
   const app = createApp({
     db,
@@ -41,8 +50,10 @@ async function main(): Promise<void> {
 
   const shutdown = async (signal: string): Promise<void> => {
     log.info({ signal }, 'shutting down');
+    dlq.stop();
     server.close();
     await orchestratorQueue.close();
+    await renderQueue.close();
     await redis.quit();
     db.close();
     process.exit(0);

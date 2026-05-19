@@ -20,12 +20,19 @@ export function createOrchestratorWorker(
         return { manifest: result.manifest, claudeAttempts: result.claudeAttempts };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        await setJobStatus(config.deps.redis, {
-          jobId: job.data.jobId,
-          status: 'failed',
-          errorMessage: message,
-        });
-        config.deps.logger.error({ jobId: job.data.jobId, err: message }, 'Orchestrator job failed');
+        const maxAttempts = job.opts.attempts ?? 1;
+        const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts;
+        if (isFinalAttempt) {
+          await setJobStatus(config.deps.redis, {
+            jobId: job.data.jobId,
+            status: 'failed',
+            errorMessage: message,
+          });
+        }
+        config.deps.logger.error(
+          { jobId: job.data.jobId, attempt: job.attemptsMade + 1, maxAttempts, err: message },
+          isFinalAttempt ? 'Orchestrator job failed (no retries left)' : 'Orchestrator job attempt failed, will retry',
+        );
         throw err;
       }
     },
