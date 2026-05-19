@@ -6,6 +6,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +22,7 @@ data class ClipPick(
 class ClipSelectViewModel(
     private val contentResolver: ContentResolver,
     private val submissionDraft: SubmissionDraft,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
 
     private val _clips = MutableStateFlow<List<ClipPick>>(emptyList())
@@ -45,7 +47,7 @@ class ClipSelectViewModel(
         }
         _error.value = null
         viewModelScope.launch {
-            val picks = withContext(Dispatchers.IO) {
+            val picks = withContext(ioDispatcher) {
                 uris.map { uri -> ClipPick(uri, readDurationMs(uri)) }
             }
             _clips.value = picks
