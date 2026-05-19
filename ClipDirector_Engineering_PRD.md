@@ -509,6 +509,27 @@ Use the shared logger package (Pino). Every log entry must include:
 
 50. Create ClipDirectorApi interface per Section 15.3
 
+### **Phase 8 — Production Deployment Mode (Amendment 2026-05-19)**
+
+| ℹ️ CONTEXT The 2026-05-19 walkthrough provisioned real S3 buckets `gain3d-clipdirector-input` / `gain3d-clipdirector-output` in `us-east-1` (public-access-block enabled, SSE-S3 default, lifecycle rules: input expires 7d, output 30d, incomplete multipart aborts at 7d) and a least-privilege IAM user `clipdirector-app` with an inline policy granting only `s3:GetObject` / `s3:PutObject` / `s3:DeleteObject` on `/*` of those two buckets (no `ListBucket`, no multipart actions, no other buckets). However, `infra/compose/docker-compose.yml` hardcodes `AWS_S3_ENDPOINT: http://minio:9000` and `AWS_S3_FORCE_PATH_STYLE: "true"` on every app service, and the `minio` container borrows `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` as its own root credentials. Net effect: if real AWS keys land in `.env` and you run `docker compose up`, MinIO silently accepts those keys as its own root creds and the entire stack reads/writes against MinIO, not real S3 — a silent-success foot-gun. Phase 8 separates dev-mode (MinIO) from prod-mode (real S3) so the same compose file can target either without surprise. |
+| :---- |
+
+51. Pick a deployment-mode strategy. Recommended: Option B (compose override file) — leaves the current MinIO-default dev workflow unchanged and adds a clean prod opt-in
+
+52. Option B impl: add `infra/compose/docker-compose.prod.yml` that removes `minio` and `minio-init` services, drops their `depends_on` references from app services, and sets `AWS_S3_ENDPOINT` / `AWS_S3_FORCE_PATH_STYLE` to empty so the SDK falls back to real AWS endpoints. Invocation: `docker compose -f docker-compose.yml -f docker-compose.prod.yml up`
+
+53. Option A impl (alternative): make `AWS_S3_ENDPOINT` / `AWS_S3_FORCE_PATH_STYLE` `${VAR:-default}` interpolated in `docker-compose.yml` with MinIO defaults; split MinIO root credentials into dedicated `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` env vars so they no longer borrow AWS credentials; place `minio` and `minio-init` into Compose profile `minio` so plain `docker compose up` runs prod-mode by default. Note: this CHANGES the dev workflow — devs must remember `--profile minio` to get the local emulator
+
+54. Update `infra/compose/.env.example` with comments documenting the dev-vs-prod env-var layout and the MinIO-swallows-AWS-credentials foot-gun
+
+55. Append a "Prod-mode smoke test" section to `Docs/phase7_smoke_test.md` mirroring Steps 4–10 but targeting `gain3d-clipdirector-*` directly
+
+56. Verify: prod-mode `docker compose up` (per chosen option) starts api-gateway / orchestrator / render-worker with no MinIO container running (`docker compose ps` shows three services, not five)
+
+57. Verify: a job submitted through the prod-mode stack lands its input clip in `s3://gain3d-clipdirector-input/...` and its output MP4 in `s3://gain3d-clipdirector-output/...`. List from the `rory-admin` AWS CLI profile, not `clipdirector-app` — the app user intentionally lacks `s3:ListBucket`
+
+58. Verify: rotating `clipdirector-app` access keys (`aws iam create-access-key` → swap into `.env` → `aws iam delete-access-key` on the old one) requires only a `docker compose restart` of the three app services, not a rebuild
+
 # **17\. Constraints and Non-Negotiables**
 
 | 🚫 CRITICAL These constraints must never be violated. They are not negotiable and are not subject to interpretation. |
