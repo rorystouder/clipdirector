@@ -2,10 +2,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13+ : scoped video access via PhotoPicker / MediaStore -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- Legacy storage read for Android 12 and below -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 
     <application
+        android:name="ai.clipdirector.ClipDirectorApp"
         android:label="ClipDirector"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
         android:theme="@style/Theme.ClipDirector">
 

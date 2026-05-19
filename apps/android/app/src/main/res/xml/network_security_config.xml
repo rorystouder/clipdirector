@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext allowed ONLY for emulator-to-host and loopback targets used by
+  the dev gateway. Everything else (real internet) requires HTTPS. Release
+  builds talk to https://api.clipdirector.example by default, so the
+  cleartext block has no effect in prod.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>
