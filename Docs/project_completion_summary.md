@@ -432,6 +432,87 @@ PRD §16 Phase 8 items 51-58 (the amendment added earlier the same day after the
 - No persistent state left in AWS beyond the IAM user/policy/active key from the original walkthrough.
 
 ### Open / Next
-- Phase 9 (Android build verification — toolchain + scaffold compile baseline) per PRD amendment items 59-66. Full Android UI implementation deliberately deferred to a future Phase 10 amendment.
 - Bump Dockerfile base images from `node:20` to `node:22` before January 2027 (AWS SDK v3 deprecation warning).
 - Add at least one royalty-free track per mood under `music/<mood>/` for real music wiring.
+
+---
+
+## 2026-05-19 — Phase 9: Android build verification (complete)
+
+PRD §16 Phase 9 items 59-66 — toolchain prep + scaffold compile baseline. Implementing the actual app is Phase 10.
+
+### What was done
+- **Item 59 (user):** installed OpenJDK 17.0.18 on the WSL host (had JDK 8 before — AGP 8.5 rejected it).
+- **Item 60 (automated):** downloaded Android cmdline-tools 12.0 to `$HOME/android-sdk/cmdline-tools/latest/`, accepted SDK licenses, installed `platforms;android-34` + `build-tools;34.0.0` + `platform-tools`.
+- **Item 61 (automated):** downloaded gradle 8.7 to `/tmp/`, generated wrapper files in a clean scratch dir (the apps/android project's settings.gradle.kts references AGP which needs the SDK to evaluate during wrapper generation), copied `gradlew` + `gradlew.bat` + `gradle/wrapper/*` into `apps/android/`. Cleaned up `/tmp/`. Wrapper self-bootstraps; `./gradlew --version` reports `Gradle 8.7 · JVM 17.0.18`.
+- **Item 62:** `apps/android/local.properties` pinned to `$HOME/android-sdk`. Already gitignored.
+- **Items 63-64:** `./gradlew :app:assembleDebug` BUILD SUCCESSFUL in 53s (first run, all deps downloaded). `./gradlew :app:lintDebug` BUILD SUCCESSFUL.
+- **Item 65:** committed `gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.{jar,properties}` as `e2b739a`.
+- **Item 66:** `apps/android/README.md` updated by Phase 10.6 (the run-on-device walkthrough supersedes the bare scaffold doc).
+
+### Mid-flight fixes
+- **Kotlin 1.9.24 → 2.0.21 bump.** The Phase 0 scaffold's `build.gradle.kts` declared `org.jetbrains.kotlin.plugin.compose` at version 1.9.24, but that plugin was introduced in Kotlin 2.0.0. First assembleDebug failed with "Plugin not found." Bumped both `kotlin.android` and `kotlin.plugin.compose` to 2.0.21. Committed in `e2b739a`.
+- Two-step wrapper bootstrap (gradle download → clean-dir generate → copy) was necessary because gradle in apps/android tried to evaluate the AGP plugin during wrapper task lookup, which fails without `local.properties` (chicken-and-egg).
+
+### Verification status
+- `./gradlew :app:assembleDebug` — green.
+- `./gradlew :app:lintDebug` — green.
+- APK runs on emulator — verified during Phase 10 (couldn't easily verify in pure-Phase-9 since the scaffold rendered an empty NavHost; that's expected).
+
+### Surface items
+- Future contributors need JDK 17+ and Android SDK 34 (cmdline-tools or Android Studio). `apps/android/README.md` walks through the first-time setup.
+- Wrapper bootstrap (`gradle wrapper`) needs a system gradle install. After Phase 9's commit, this is one-time history; clones just use `./gradlew`.
+
+---
+
+## 2026-05-19 — Phase 10: Full Android implementation (complete, manual smoke pending)
+
+PRD §16 Phase 10 items 67-76 (amendment added same-day after Phase 9). Same-day extension because the Phase 9 build kicked off in the background and the user chose Option B (full implementation) while it was running. Plan saved at `/home/rorystouder/.claude/plans/typed-churning-harp.md`.
+
+Output: debuggable APK that registers, logs in, picks 1-12 video clips, submits a job with upload progress, polls status, plays the rendered MP4 in ExoPlayer, and lists past jobs persisted via DataStore.
+
+### What was built (7 chunks, one commit each)
+
+- **10.1 (`38840c3`)** — foundation. `kotlin.plugin.serialization` plugin, DataStore + security-crypto + lifecycle + Coil video + MockWebServer + Turbine + MockK deps, `buildTypes` with `BuildConfig.API_BASE_URL`, AndroidManifest with `ClipDirectorApp` Application class + `READ_MEDIA_VIDEO` + legacy `READ_EXTERNAL_STORAGE`, `network_security_config.xml` allowing cleartext for `10.0.2.2` / `localhost`.
+- **10.2 (`429bd40`)** — data layer. Hand-rolled DI (`AppContainer` / `ServiceLocator`; no Hilt). Two `OkHttpClient`s: unauthed for `/auth/refresh` (avoids recursive refresh), authed (`AuthInterceptor` + `AuthAuthenticator`) for everything else. Single-flight `Mutex` around refresh prevents the "parallel-401-all-refresh" race. `TokenStore` + `JobIdStore` (both DataStore-backed). `CountingRequestBody` with throttled progress callback. `channelFlow` not `flow` in `JobRepository.submitJob` because the upload thread emits progress out-of-band. `ApiErrorAdapter` parses `{code, message, details?}` with rate-limit special-case.
+- **10.3 (`468015a`)** — auth screens. `LoginScreen` + `RegisterScreen` + `MainActivity` with auth-gated NavHost (synchronous TokenStore read at `onCreate` via `runBlocking` picks `login` vs `clips` start destination). Top-level `Scaffold` + `SnackbarHost` wired to `ErrorBus.messages`.
+- **10.4 (`b26aedf`)** — job-flow screens. `ClipSelect` (PhotoPicker, Coil video thumbnails, `MediaMetadataRetriever` durations), `Prompt` (form + multipart submit collecting `channelFlow`), `Processing` (2s polling with virtual-time-friendly `delay`), `Preview` (ExoPlayer in `DisposableEffect`, NOT in VM; `LifecycleEventObserver` pauses on `ON_STOP`), `History` (DataStore-backed). Mid-flight fix: Material3's `ExposedDropdownMenu` is an `ExposedDropdownMenuBoxScope` extension, not a standalone composable.
+- **10.5 (`10766b2`)** — 20 unit tests, all green. `MainDispatcherRule` sets `Dispatchers.Main` to a controllable `StandardTestDispatcher`. Tests cover `ApiErrorAdapter` (6), `AuthRepository` against MockWebServer (5), `LoginViewModel` (3), `ProcessingViewModel` with Turbine + virtual time (3), `ClipSelectViewModel` (3). All failure-shaped per project rule. Mid-flight fix: `okio.Buffer` drains on read, so reading the request body twice (once in `assertTrue` message, once in condition) returns "" on the second call.
+- **10.6 (`99e2973`)** — polish. `./gradlew :app:lintDebug` clean (after applying Compose BOM to `androidTestImplementation` so `ui-test-junit4` resolves). README rewrite: emulator path uses `10.0.2.2`; real device needs `adb reverse tcp:3000 tcp:3000`. Full manual smoke checklist included.
+- **10.7** — this PRD amendment + summary entry.
+
+### Architecture decisions locked after critique
+
+A Plan agent critiqued my initial design before implementation. Material changes:
+- **DI**: Hilt → manual `ServiceLocator`. Saved KSP annotation-processor build cost; sufficient at this scale.
+- **Auth refresh**: `Interceptor` → OkHttp `Authenticator` + `Mutex`. OkHttp serializes Authenticator calls per-connection, eliminating the parallel-refresh race.
+- **Persistence**: Room → DataStore + in-memory cache. Server is authoritative for job state; local mirror creates sync conflicts.
+- **File picker**: SAF fallback → `ActivityResultContracts.PickVisualMedia` (AndroidX backports to API 19).
+- **Player**: ExoPlayer in `DisposableEffect`, not VM (binds Activity context).
+
+### Verification status
+
+| Check | Status |
+|---|---|
+| `./gradlew :app:assembleDebug` | green |
+| `./gradlew :app:lintDebug` | green (warnings are dep-version nags + Android 14 partial-photos-access nag, both Phase 11) |
+| `./gradlew :app:testDebugUnitTest` | **20/20 passing** |
+| Manual install on emulator + happy-path smoke | **PENDING USER** |
+
+Phase 10 stays open until the user runs the manual smoke (per `apps/android/README.md` § Smoke test) and confirms the full flow works on a real Android target.
+
+### Out of scope — Phase 11+
+
+- **WorkManager + foreground service for upload resilience under process death.** Biggest gap per plan-agent critique. Today, force-kill mid-upload aborts the upload.
+- Push notifications for job completion
+- Multi-account / account switcher
+- Tablet / landscape-specific layouts
+- Crashlytics / analytics
+- ProGuard / R8 release-mode optimization beyond defaults
+- Localization / RTL
+- Accessibility audit beyond Compose defaults
+
+### Open / Next
+- User manual smoke (closes Phase 10).
+- Phase 11 (production-grade resilience): WorkManager-backed uploads, push, multi-account.
+- Backend dep bumps deferred from Phase 7 (Node 20 → 22 before Jan 2027) and Phase 4 (music library bootstrap with real licensed tracks).
