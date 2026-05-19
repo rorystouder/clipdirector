@@ -4,6 +4,14 @@
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
+  "exports": {
+    ".": { "import": "./dist/index.js" },
+    "./processor": { "types": "./dist/processor.d.ts", "import": "./dist/processor.js" },
+    "./worker": { "types": "./dist/worker.d.ts", "import": "./dist/worker.js" },
+    "./music": { "types": "./dist/music/selector.d.ts", "import": "./dist/music/selector.js" },
+    "./ffmpeg/runner": { "types": "./dist/ffmpeg/runner.d.ts", "import": "./dist/ffmpeg/runner.js" },
+    "./errors": { "types": "./dist/errors.d.ts", "import": "./dist/errors.js" }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",

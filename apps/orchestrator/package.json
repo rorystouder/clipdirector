@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
+  "exports": {
+    ".": { "import": "./dist/index.js" },
+    "./processor": { "types": "./dist/processor.d.ts", "import": "./dist/processor.js" },
+    "./worker": { "types": "./dist/worker.d.ts", "import": "./dist/worker.js" },
+    "./claude": { "types": "./dist/claude/client.d.ts", "import": "./dist/claude/client.js" },
+    "./clips/transcriber": { "types": "./dist/clips/transcriber.d.ts", "import": "./dist/clips/transcriber.js" },
+    "./clips/downloader": { "types": "./dist/clips/downloader.d.ts", "import": "./dist/clips/downloader.js" },
+    "./clips/frame-sampler": { "types": "./dist/clips/frame-sampler.d.ts", "import": "./dist/clips/frame-sampler.js" },
+    "./errors": { "types": "./dist/errors.d.ts", "import": "./dist/errors.js" }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",

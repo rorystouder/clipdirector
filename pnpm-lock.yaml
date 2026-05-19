@@ -75,6 +75,12 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.600.0
         version: 3.1049.0
+      '@clipdirector/orchestrator':
+        specifier: workspace:*
+        version: link:../orchestrator
+      '@clipdirector/render-worker':
+        specifier: workspace:*
+        version: link:../render-worker
       '@types/better-sqlite3':
         specifier: ^7.6.10
         version: 7.6.13
