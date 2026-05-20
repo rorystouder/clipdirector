@@ -11,7 +11,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,8 +38,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,56 +59,121 @@ fun PromptScreen(onSubmit: (jobId: String) -> Unit) {
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("Describe your cut", style = MaterialTheme.typography.headlineSmall)
         Text(
-            "${vm.clipCount} clip${if (vm.clipCount == 1) "" else "s"} ready to upload",
-            style = MaterialTheme.typography.bodySmall,
+            "${vm.clipCount} clip${if (vm.clipCount == 1) "" else "s"} ready · describe your cut",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        OutlinedTextField(
-            value = form.prompt,
-            onValueChange = { vm.updatePrompt(it); vm.acknowledgeError() },
-            label = { Text("Prompt") },
-            placeholder = { Text("e.g. snappy 6 second highlight cut") },
-            supportingText = { Text("${form.prompt.length} / ${PromptViewModel.MAX_PROMPT_LEN}") },
-            modifier = Modifier.fillMaxWidth(),
-        )
+        // Prompt card
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            ),
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "The brief",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = form.prompt,
+                    onValueChange = { vm.updatePrompt(it); vm.acknowledgeError() },
+                    placeholder = { Text("e.g. snappy 6 second highlight cut") },
+                    supportingText = { Text("${form.prompt.length} / ${PromptViewModel.MAX_PROMPT_LEN}") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
 
-        EnumDropdown("Platform", form.platform, Platform.values().toList()) { vm.updatePlatform(it) }
-        EnumDropdown("Music mood", form.musicMood, MusicMood.values().toList()) { vm.updateMood(it) }
-        EnumDropdown("Caption style", form.captionStyle, CaptionStyle.values().toList()) { vm.updateStyle(it) }
+        // Style card
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            ),
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    "Style",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                EnumDropdown("Platform", form.platform, Platform.values().toList()) {
+                    vm.updatePlatform(it)
+                }
+                EnumDropdown("Music mood", form.musicMood, MusicMood.values().toList()) {
+                    vm.updateMood(it)
+                }
+                EnumDropdown("Caption style", form.captionStyle, CaptionStyle.values().toList()) {
+                    vm.updateStyle(it)
+                }
+            }
+        }
 
         when (val s = state) {
             is PromptViewModel.SubmitState.Error -> {
-                Text(s.message, color = MaterialTheme.colorScheme.error)
+                Text(
+                    s.message,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
             is PromptViewModel.SubmitState.Uploading -> {
-                LinearProgressIndicator(
-                    progress = { s.fraction },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text("Uploading clips: ${(s.fraction * 100).toInt()}%")
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    LinearProgressIndicator(
+                        progress = { s.fraction },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "Uploading clips · ${(s.fraction * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            PromptViewModel.SubmitState.Preparing -> { Text("Preparing upload…") }
+            PromptViewModel.SubmitState.Preparing -> {
+                Text(
+                    "Preparing upload…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             else -> Unit
         }
 
-        Spacer(Modifier.height(8.dp))
+        val submitting = state is PromptViewModel.SubmitState.Preparing ||
+            state is PromptViewModel.SubmitState.Uploading
+
         Button(
             onClick = { vm.submit() },
-            enabled = state is PromptViewModel.SubmitState.Idle ||
-                state is PromptViewModel.SubmitState.Error,
-            modifier = Modifier.fillMaxWidth(),
+            enabled = !submitting,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
         ) {
-            if (state is PromptViewModel.SubmitState.Preparing ||
-                state is PromptViewModel.SubmitState.Uploading
-            ) {
-                CircularProgressIndicator(modifier = Modifier.height(20.dp))
+            if (submitting) {
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                )
             } else {
-                Text("Submit")
+                Text("Submit", style = MaterialTheme.typography.labelLarge)
             }
         }
     }
