@@ -449,6 +449,80 @@ describe('Jobs — GET /jobs/:id (PRD T-11)', () => {
   });
 });
 
+describe('Enum contract — shared-types (TS) ↔ gateway zod ↔ Android Kotlin enums (Tier 2 #9)', () => {
+  // The exact wire strings that the gateway accepts MUST match the Android
+  // Kotlin enums' @SerialName values. The shared-types arrays are the
+  // source of truth; this suite pins their contents so any drift fails CI
+  // before Android sees a deserialization crash at runtime.
+  //
+  // If you add e.g. 'lofi' to MUSIC_MOODS in packages/shared-types/src/job.ts,
+  // this test will pass — but you MUST also add LOFI(@SerialName("lofi"))
+  // to apps/android/app/src/main/kotlin/ai/clipdirector/data/job/JobApi.kt
+  // BEFORE merging. There is currently no automated way to enforce the
+  // Android half from TypeScript-land; the comment + this test's failure
+  // message is the next-best mitigation.
+
+  it('PLATFORMS contains exactly the four documented values', async () => {
+    const { PLATFORMS } = await import('@clipdirector/shared-types');
+    expect([...PLATFORMS].sort()).toEqual(['generic', 'reels', 'shorts', 'tiktok']);
+  });
+
+  it('MUSIC_MOODS contains exactly the five documented values', async () => {
+    const { MUSIC_MOODS } = await import('@clipdirector/shared-types');
+    // JS string sort: 'none' < 'nostalgic' (compares 'n' vs 's' at index 2).
+    expect([...MUSIC_MOODS].sort()).toEqual([
+      'chill',
+      'cinematic',
+      'energetic',
+      'none',
+      'nostalgic',
+    ]);
+  });
+
+  it('CAPTION_STYLES contains exactly the three documented values', async () => {
+    const { CAPTION_STYLES } = await import('@clipdirector/shared-types');
+    expect([...CAPTION_STYLES].sort()).toEqual(['bold_white_shadow', 'minimal', 'none']);
+  });
+
+  it('JOB_STATUSES contains exactly the seven documented values', async () => {
+    const { JOB_STATUSES } = await import('@clipdirector/shared-types');
+    expect([...JOB_STATUSES].sort()).toEqual([
+      'complete',
+      'failed',
+      'queued',
+      'reasoning',
+      'rendering',
+      'sampling',
+      'uploading',
+    ]);
+  });
+
+  it('TRANSITION_TYPES contains exactly the three documented values', async () => {
+    const { TRANSITION_TYPES } = await import('@clipdirector/shared-types');
+    expect([...TRANSITION_TYPES].sort()).toEqual(['cut', 'dissolve', 'fade']);
+  });
+
+  it("gateway rejects an unknown platform with 400 (drift guard)", async () => {
+    const { accessToken } = await register('drift-platform@example.com', 'correct-horse-battery-staple');
+    const fakeBuf = Buffer.from('fake');
+    const res = await request(app)
+      .post('/jobs')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .attach('clips', fakeBuf, { filename: 'a.mp4', contentType: 'video/mp4' })
+      .field(
+        'json',
+        JSON.stringify({
+          userPrompt: 'x',
+          platform: 'twitch', // not in PLATFORMS
+          musicMood: 'energetic',
+          captionStyle: 'none',
+        }),
+      );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('validation_error');
+  });
+});
+
 describe('Health', () => {
   it('returns 200 + status:ok when Redis is reachable', async () => {
     const res = await request(app).get('/health');

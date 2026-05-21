@@ -4,20 +4,19 @@ import { v4 as uuid } from 'uuid';
 import { z } from 'zod';
 import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
-import type {
-  OrchestratorJobPayload,
-  Platform,
-  CaptionStyle,
-  MusicMood,
+import {
+  PLATFORMS,
+  MUSIC_MOODS,
+  CAPTION_STYLES,
+  type OrchestratorJobPayload,
+  type Platform,
+  type CaptionStyle,
+  type MusicMood,
 } from '@clipdirector/shared-types';
 import { setJobStatus, getJobStatus } from '@clipdirector/queue-client';
 import type { StorageClient } from '@clipdirector/storage-client';
 import { ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from '../errors.js';
 import { requireAuth } from '../auth/middleware.js';
-
-const PLATFORMS: readonly Platform[] = ['tiktok', 'reels', 'shorts', 'generic'];
-const MOODS: readonly MusicMood[] = ['energetic', 'chill', 'nostalgic', 'cinematic', 'none'];
-const STYLES: readonly CaptionStyle[] = ['bold_white_shadow', 'minimal', 'none'];
 
 export interface JobsRouterDeps {
   redis: Redis;
@@ -38,9 +37,9 @@ export function buildJobsRouter(deps: JobsRouterDeps): Router {
 
   const submitJobSchema = z.object({
     userPrompt: z.string().min(1).max(deps.maxPromptLength),
-    platform: z.enum(PLATFORMS as [Platform, ...Platform[]]),
-    musicMood: z.enum(MOODS as [MusicMood, ...MusicMood[]]),
-    captionStyle: z.enum(STYLES as [CaptionStyle, ...CaptionStyle[]]),
+    platform: z.enum(PLATFORMS as unknown as [Platform, ...Platform[]]),
+    musicMood: z.enum(MUSIC_MOODS as unknown as [MusicMood, ...MusicMood[]]),
+    captionStyle: z.enum(CAPTION_STYLES as unknown as [CaptionStyle, ...CaptionStyle[]]),
   });
 
   const upload = multer({
