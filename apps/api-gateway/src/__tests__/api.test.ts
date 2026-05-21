@@ -135,6 +135,24 @@ describe('Auth — register', () => {
     expect(res.body.code).toBe('validation_error');
   });
 
+  it('serializes validation `details` as string[] (Android contract)', async () => {
+    // The error envelope MUST be { code, message, details?: string[] }.
+    // Android's GatewayError declares `details: List<String>?`, so an
+    // accidental drift back to ZodIssue[] (object array) would silently
+    // break field-level error messaging in the mobile client.
+    const res = await request(app)
+      .post('/auth/register')
+      .send({ email: 'not-an-email', password: 'short' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('validation_error');
+    expect(Array.isArray(res.body.details)).toBe(true);
+    for (const d of res.body.details) {
+      expect(typeof d).toBe('string');
+    }
+    // At least one detail should reference the password length rule.
+    expect(res.body.details.join(' ')).toMatch(/password/i);
+  });
+
   it('normalizes email to lowercase', async () => {
     const reg = await request(app)
       .post('/auth/register')
@@ -363,6 +381,31 @@ describe('Jobs — GET /jobs/:id (PRD T-11)', () => {
       .get('/jobs/job_alice')
       .set('Authorization', `Bearer ${bob.accessToken}`);
     expect(res.status).toBe(403);
+  });
+
+  it("returns 403 when DOWNLOADING another user's job (T-cross-user-download)", async () => {
+    // This guards the highest-impact endpoint — a presigned S3 URL leak —
+    // and proves the cross-user ownership check on /download is present.
+    // If a future refactor drops the guard, this test fails loud.
+    const alice = await register('alice-dl@example.com', 'correct-horse-battery-staple');
+    const bob = await register('bob-dl@example.com', 'correct-horse-battery-staple');
+
+    await setJobStatus(redis, {
+      jobId: 'job_alice_complete',
+      userId: alice.userId,
+      status: 'complete',
+      progress: 100,
+      outputUrl: `s3://${OUTPUT_BUCKET}/output/${alice.userId}/job_alice_complete/output.mp4`,
+      createdAt: '2026-05-16T12:00:00.000Z',
+      updatedAt: '2026-05-16T12:00:00.000Z',
+    });
+
+    const res = await request(app)
+      .get('/jobs/job_alice_complete/download')
+      .set('Authorization', `Bearer ${bob.accessToken}`);
+    expect(res.status).toBe(403);
+    // And the response must NOT contain a presigned URL (defense in depth).
+    expect(res.body.url).toBeUndefined();
   });
 
   it('returns 404 for an unknown jobId', async () => {
