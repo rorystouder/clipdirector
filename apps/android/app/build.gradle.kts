@@ -36,7 +36,17 @@ android {
                 ?: System.getenv("CLIPDIRECTOR_API_BASE_URL")
                 ?: "https://api.clipdirector.example/"
             buildConfigField("String", "API_BASE_URL", "\"$releaseBaseUrl\"")
-            isMinifyEnabled = false
+            // R8 strips dead code + obfuscates class names, hiding the
+            // auth flow surface and the gateway URL constant in release
+            // APKs. proguard-rules.pro keeps the kotlinx-serialization
+            // descriptors + Retrofit interfaces + Media3 reflection
+            // surface that R8 cannot prove safe to strip.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 
