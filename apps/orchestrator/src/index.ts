@@ -33,6 +33,7 @@ async function main(): Promise<void> {
   });
   const transcriber = createOpenAiTranscriber({
     apiKey: env.OPENAI_API_KEY,
+    ffmpegPath: env.FFMPEG_PATH,
     ffprobePath: env.FFPROBE_PATH,
   });
 
