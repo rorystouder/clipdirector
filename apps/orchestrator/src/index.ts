@@ -28,12 +28,12 @@ async function main(): Promise<void> {
   });
   const downloader = createClipDownloader(storage);
   const frameSampler = createFfmpegFrameSampler({
-    ffmpegPath: '/usr/bin/ffmpeg',
-    ffprobePath: '/usr/bin/ffprobe',
+    ffmpegPath: env.FFMPEG_PATH,
+    ffprobePath: env.FFPROBE_PATH,
   });
   const transcriber = createOpenAiTranscriber({
     apiKey: env.OPENAI_API_KEY,
-    ffprobePath: '/usr/bin/ffprobe',
+    ffprobePath: env.FFPROBE_PATH,
   });
 
   const worker = createOrchestratorWorker({

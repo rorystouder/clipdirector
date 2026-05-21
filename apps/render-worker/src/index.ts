@@ -23,7 +23,11 @@ async function main(): Promise<void> {
       storage,
       music,
       ffmpeg: { ffmpegPath: env.FFMPEG_PATH, ffprobePath: env.FFPROBE_PATH },
-      outputBucket: process.env.AWS_S3_OUTPUT_BUCKET ?? 'clipdirector-output',
+      // Was: `process.env.AWS_S3_OUTPUT_BUCKET ?? 'clipdirector-output'` —
+      // bypassed validateEnv and the hardcoded fallback meant a misconfigured
+      // host would silently write to the wrong bucket. Now sourced from the
+      // validated baseEnvSchema (z.string().min(1) — boot fails loud if unset).
+      outputBucket: env.AWS_S3_OUTPUT_BUCKET,
       tempRoot: env.RENDER_TEMP_DIR,
       logger: log,
     },

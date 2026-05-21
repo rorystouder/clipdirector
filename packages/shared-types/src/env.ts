@@ -44,6 +44,11 @@ export const orchestratorEnvSchema = baseEnvSchema.extend({
   ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-20250514'),
   ANTHROPIC_MAX_TOKENS: z.coerce.number().int().positive().default(2000),
   OPENAI_API_KEY: z.string().min(1, 'OPENAI_API_KEY required for Whisper'),
+  // Orchestrator needs ffmpeg + ffprobe for frame sampling and audio-stream
+  // probing. Hardcoded paths previously bypassed validateEnv, breaking on
+  // any host where ffmpeg lives outside /usr/bin (Alpine, custom builds).
+  FFMPEG_PATH: z.string().default('/usr/bin/ffmpeg'),
+  FFPROBE_PATH: z.string().default('/usr/bin/ffprobe'),
 });
 
 export const renderWorkerEnvSchema = baseEnvSchema.extend({
