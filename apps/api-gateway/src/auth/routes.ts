@@ -103,7 +103,22 @@ export function buildAuthRouter(deps: AuthRouterDeps): Router {
       const hash = hashRefreshToken(parsed.data.refreshToken);
       const row = deps.repo.findRefreshByHash(hash);
       if (!row) return next(new UnauthorizedError('Invalid refresh token'));
-      if (row.revoked_at) return next(new UnauthorizedError('Refresh token revoked'));
+
+      // Theft detection: a refresh-token rotation chain only revokes the
+      // PREVIOUS token. If the previous token is presented again, it's
+      // either (a) the legitimate client replaying after a network blip
+      // — possible but rare since the rotated pair was already saved
+      // client-side; or (b) the original token was captured and the
+      // attacker is racing the client. We can't distinguish, so we
+      // treat it as theft: revoke EVERY refresh token for the user.
+      // The legitimate client will get 401 on next request and have to
+      // re-authenticate — a one-time pain. The attacker is fully
+      // de-credentialed.
+      if (row.revoked_at) {
+        deps.repo.revokeAllForUser(row.user_id);
+        return next(new UnauthorizedError('Refresh token revoked'));
+      }
+
       if (new Date(row.expires_at).getTime() <= Date.now()) {
         return next(new UnauthorizedError('Refresh token expired'));
       }

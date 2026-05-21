@@ -242,6 +242,38 @@ describe('Auth — refresh + logout', () => {
     const after = await request(app).post('/auth/refresh').send({ refreshToken });
     expect(after.status).toBe(401);
   });
+
+  it('treats replayed-after-rotation refresh as theft → revokes ALL tokens for the user (Tier 2 #11)', async () => {
+    // Scenario: attacker captured the original refresh token. Legitimate
+    // client rotated it (got pair B). Attacker now replays the original
+    // (pair A's refresh). The system should:
+    //   1. Reject the replayed refresh with 401
+    //   2. Treat it as theft and revoke pair B too — so the legitimate
+    //      client's still-valid refresh is also burned
+    //   3. Both parties must re-authenticate to recover
+
+    const { refreshToken: tokenA } = await register('theft@example.com', 'correct-horse-battery-staple');
+
+    // Legitimate rotation: A → B
+    const rotation = await request(app).post('/auth/refresh').send({ refreshToken: tokenA });
+    expect(rotation.status).toBe(200);
+    const tokenB: string = rotation.body.refreshToken;
+    expect(tokenB).not.toBe(tokenA);
+
+    // Confirm B works
+    const useB = await request(app).post('/auth/refresh').send({ refreshToken: tokenB });
+    expect(useB.status).toBe(200);
+    const tokenC: string = useB.body.refreshToken;
+
+    // Attacker replays A (which was already revoked by the legitimate rotation)
+    const replay = await request(app).post('/auth/refresh').send({ refreshToken: tokenA });
+    expect(replay.status).toBe(401);
+
+    // KEY ASSERTION: C should now ALSO be revoked (because we revoked all
+    // tokens for the user). Without theft detection, C would still work.
+    const useC = await request(app).post('/auth/refresh').send({ refreshToken: tokenC });
+    expect(useC.status).toBe(401);
+  });
 });
 
 describe('Jobs — POST /jobs (PRD T-01, T-02, T-03)', () => {
