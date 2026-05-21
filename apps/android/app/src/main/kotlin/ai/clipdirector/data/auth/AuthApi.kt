@@ -2,6 +2,7 @@ package ai.clipdirector.data.auth
 
 import kotlinx.serialization.Serializable
 import retrofit2.http.Body
+import retrofit2.http.Header
 import retrofit2.http.POST
 
 @Serializable
@@ -32,9 +33,10 @@ data class RefreshResponse(
 data class LogoutRequest(val refreshToken: String)
 
 /**
- * UNAUTHENTICATED endpoints. The OkHttpClient used to build this interface
- * MUST NOT carry the [AuthInterceptor] / [AuthAuthenticator] — otherwise
- * refresh-on-401 calls itself and we get an infinite loop.
+ * The unauthenticated OkHttpClient serves this interface so the refresh call
+ * cannot recursively trigger AuthAuthenticator. Logout is here too — it needs
+ * the bearer, but we pass it explicitly as a header so it survives expiry
+ * (an expired access token at logout-time still wants to revoke the refresh).
  */
 interface AuthApi {
 
@@ -46,4 +48,10 @@ interface AuthApi {
 
     @POST("auth/refresh")
     suspend fun refresh(@Body body: RefreshRequest): RefreshResponse
+
+    @POST("auth/logout")
+    suspend fun logout(
+        @Header("Authorization") bearer: String,
+        @Body body: LogoutRequest,
+    )
 }

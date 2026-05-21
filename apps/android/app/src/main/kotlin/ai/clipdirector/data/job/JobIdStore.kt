@@ -39,8 +39,4 @@ class JobIdStore(private val context: Context) {
             prefs[JOB_IDS_KEY] = updated.joinToString(",")
         }
     }
-
-    suspend fun clear() {
-        context.jobIdsDataStore.edit { it.remove(JOB_IDS_KEY) }
-    }
 }

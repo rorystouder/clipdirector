@@ -2,7 +2,6 @@ package ai.clipdirector.ui.theme
 
 import ai.clipdirector.data.job.JobStatus
 import android.app.Activity
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -14,17 +13,11 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 /**
- * ClipDirector dark theme — see /DESIGN.md.
- *
- * Always dark; we don't expose a light theme because the brand is cinematic-dark.
- * The `darkTheme` parameter is accepted only so future light-mode experiments
- * don't require an API change at every call site.
+ * ClipDirector dark theme — see /DESIGN.md. Always dark; the brand is
+ * cinematic-dark and there's no light theme.
  */
 @Composable
-fun ClipDirectorTheme(
-    @Suppress("UNUSED_PARAMETER") darkTheme: Boolean = isSystemInDarkTheme(),
-    content: @Composable () -> Unit,
-) {
+fun ClipDirectorTheme(content: @Composable () -> Unit) {
     val colorScheme = darkColorScheme(
         primary = Primary,
         onPrimary = OnPrimary,

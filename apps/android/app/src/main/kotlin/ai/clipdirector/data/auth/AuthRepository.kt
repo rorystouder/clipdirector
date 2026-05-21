@@ -1,7 +1,6 @@
 package ai.clipdirector.data.auth
 
 import ai.clipdirector.data.error.ApiErrorAdapter
-import kotlinx.coroutines.flow.Flow
 import retrofit2.HttpException
 
 sealed interface AuthResult {
@@ -15,12 +14,9 @@ sealed interface AuthResult {
  */
 class AuthRepository(
     private val authApi: AuthApi,
-    private val accountApi: AccountApi,
     private val tokenStore: TokenStore,
     private val errorAdapter: ApiErrorAdapter,
 ) {
-
-    val tokens: Flow<Tokens?> = tokenStore.tokens
 
     suspend fun register(email: String, password: String): AuthResult {
         return try {
@@ -61,7 +57,12 @@ class AuthRepository(
     suspend fun logout(): AuthResult {
         val current = tokenStore.current()
         if (current != null) {
-            runCatching { accountApi.logout(LogoutRequest(current.refreshToken)) }
+            runCatching {
+                authApi.logout(
+                    bearer = "Bearer ${current.accessToken}",
+                    body = LogoutRequest(current.refreshToken),
+                )
+            }
         }
         tokenStore.clear()
         return AuthResult.Success(AuthUser(id = "", email = current?.email ?: ""))

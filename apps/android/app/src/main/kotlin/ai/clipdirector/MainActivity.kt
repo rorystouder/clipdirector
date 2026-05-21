@@ -1,6 +1,5 @@
 package ai.clipdirector
 
-import ai.clipdirector.data.error.ErrorBus
 import ai.clipdirector.ui.auth.LoginScreen
 import ai.clipdirector.ui.auth.RegisterScreen
 import ai.clipdirector.ui.clips.ClipSelectScreen
@@ -17,15 +16,12 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -52,13 +48,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun ClipDirectorApp(startWithAuth: Boolean) {
     val nav = rememberNavController()
-    val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val container = androidx.compose.ui.platform.LocalContext.current.appContainer
-
-    LaunchedEffect(Unit) {
-        ErrorBus.messages.collect { msg -> snackbarHostState.showSnackbar(msg) }
-    }
+    val container = LocalContext.current.appContainer
 
     val backStackEntry by nav.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
@@ -102,7 +93,6 @@ private fun ClipDirectorApp(startWithAuth: Boolean) {
                 else -> Unit
             }
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         modifier = Modifier.fillMaxSize(),
     ) { padding ->
         NavHost(
@@ -126,7 +116,6 @@ private fun ClipDirectorApp(startWithAuth: Boolean) {
                     onNavigateToLogin = { nav.popBackStack("login", inclusive = false) },
                 )
             }
-
             composable("clips") {
                 ClipSelectScreen(onNext = { nav.navigate("prompt") })
             }
@@ -173,6 +162,5 @@ private fun ClipDirectorApp(startWithAuth: Boolean) {
     }
 }
 
-// Import shim for findStartDestination
 private fun androidx.navigation.NavGraph.findStartDestination() = this.findNode(this.startDestinationId)
     ?: throw IllegalStateException("Start destination not found in nav graph")

@@ -1,7 +1,6 @@
 package ai.clipdirector.data.network
 
 import ai.clipdirector.BuildConfig
-import ai.clipdirector.data.auth.AccountApi
 import ai.clipdirector.data.auth.AuthApi
 import ai.clipdirector.data.auth.AuthAuthenticator
 import ai.clipdirector.data.auth.AuthInterceptor
@@ -20,9 +19,10 @@ import java.util.concurrent.TimeUnit
  * [ai.clipdirector.AppContainer]. Two OkHttpClients live here:
  *
  * - [unauthedClient] — no AuthInterceptor / Authenticator. Used by [authApi]
- *   so the refresh call itself never tries to recursively refresh.
+ *   (register / login / refresh / logout). Logout passes the bearer as an
+ *   explicit `@Header` parameter so it can't recursively trigger refresh.
  * - [authedClient] — AuthInterceptor adds Bearer, AuthAuthenticator handles
- *   401-refresh-retry. Used by [accountApi] and [jobApi].
+ *   401-refresh-retry. Used by [jobApi].
  */
 class NetworkModule(tokenStore: TokenStore) {
 
@@ -33,9 +33,17 @@ class NetworkModule(tokenStore: TokenStore) {
 
     private val converterFactory = json.asConverterFactory("application/json".toMediaType())
 
+    /**
+     * Body-level logging in debug builds reveals every header (including
+     * `Authorization: Bearer …`) and every body (including refresh tokens).
+     * We explicitly redact them so sideloaded debug builds and crash-reporter
+     * log capture don't ship tokens off-device.
+     */
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
         level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY
         else HttpLoggingInterceptor.Level.NONE
+        redactHeader("Authorization")
+        redactHeader("Cookie")
     }
 
     private val unauthedClient: OkHttpClient = OkHttpClient.Builder()
@@ -68,6 +76,5 @@ class NetworkModule(tokenStore: TokenStore) {
         .addConverterFactory(converterFactory)
         .build()
 
-    val accountApi: AccountApi = authedRetrofit.create(AccountApi::class.java)
     val jobApi: JobApi = authedRetrofit.create(JobApi::class.java)
 }

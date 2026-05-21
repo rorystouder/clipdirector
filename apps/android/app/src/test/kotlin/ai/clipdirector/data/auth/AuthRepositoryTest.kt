@@ -26,7 +26,6 @@ class AuthRepositoryTest {
     private lateinit var server: MockWebServer
     private lateinit var authApi: AuthApi
     private val tokenStore: TokenStore = mockk(relaxed = true)
-    private val accountApi: AccountApi = mockk(relaxed = true)
 
     @Before
     fun setUp() {
@@ -55,7 +54,7 @@ class AuthRepositoryTest {
                 """{"user":{"id":"u1","email":"a@b.com"},"accessToken":"AT","refreshToken":"RT","expiresInSec":900}"""
             )
         )
-        val repo = AuthRepository(authApi, accountApi, tokenStore, ApiErrorAdapter())
+        val repo = AuthRepository(authApi, tokenStore, ApiErrorAdapter())
 
         val result = repo.login("A@B.com", "correcthorsebatterystaple")
 
@@ -82,7 +81,7 @@ class AuthRepositoryTest {
                 """{"code":"unauthorized","message":"Invalid credentials"}"""
             )
         )
-        val repo = AuthRepository(authApi, accountApi, tokenStore, ApiErrorAdapter())
+        val repo = AuthRepository(authApi, tokenStore, ApiErrorAdapter())
 
         val result = repo.login("a@b.com", "wrongpassword123")
 
@@ -98,7 +97,7 @@ class AuthRepositoryTest {
                 .addHeader("Retry-After", "120")
                 .setBody("""{"code":"rate_limited","message":"too many"}""")
         )
-        val repo = AuthRepository(authApi, accountApi, tokenStore, ApiErrorAdapter())
+        val repo = AuthRepository(authApi, tokenStore, ApiErrorAdapter())
 
         val result = repo.login("a@b.com", "correcthorsebatterystaple")
 
@@ -113,7 +112,7 @@ class AuthRepositoryTest {
                 """{"code":"conflict","message":"Email already registered"}"""
             )
         )
-        val repo = AuthRepository(authApi, accountApi, tokenStore, ApiErrorAdapter())
+        val repo = AuthRepository(authApi, tokenStore, ApiErrorAdapter())
 
         val result = repo.register("a@b.com", "correcthorsebatterystaple")
 
@@ -124,9 +123,11 @@ class AuthRepositoryTest {
     @Test
     fun `logout clears tokens even if server call fails`() = runTest {
         coEvery { tokenStore.current() } returns Tokens("AT", "RT", "a@b.com")
-        coEvery { accountApi.logout(any()) } throws RuntimeException("network")
+        // server returns 500 → AuthApi.logout throws HttpException; logout()
+        // wraps in runCatching so the local clear still runs.
+        server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(500))
 
-        val repo = AuthRepository(authApi, accountApi, tokenStore, ApiErrorAdapter())
+        val repo = AuthRepository(authApi, tokenStore, ApiErrorAdapter())
         repo.logout()
 
         coVerify { tokenStore.clear() }

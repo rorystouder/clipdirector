@@ -5,7 +5,6 @@ import ai.clipdirector.data.network.CountingRequestBody
 import android.content.ContentResolver
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
@@ -110,7 +109,3 @@ class JobRepository(
         }
     }
 }
-
-// Unused import suppression for SendChannel — keeping for IDE clarity around channelFlow
-@Suppress("unused")
-private typealias _PlaceholderForSendChannel = SendChannel<*>

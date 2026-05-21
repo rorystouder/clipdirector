@@ -22,12 +22,11 @@ class AppContainer(context: Context) {
     val jobIdStore: JobIdStore = JobIdStore(appContext)
     val submissionDraft: SubmissionDraft = SubmissionDraft()
 
-    private val errorAdapter = ApiErrorAdapter()
+    val errorAdapter: ApiErrorAdapter = ApiErrorAdapter()
     private val network = NetworkModule(tokenStore)
 
     val authRepository: AuthRepository = AuthRepository(
         authApi = network.authApi,
-        accountApi = network.accountApi,
         tokenStore = tokenStore,
         errorAdapter = errorAdapter,
     )

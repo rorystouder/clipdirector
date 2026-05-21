@@ -38,7 +38,6 @@ fun BrandTopBar(
     title: String,
     onBack: (() -> Unit)? = null,
     overflowItems: List<OverflowItem> = emptyList(),
-    actions: @Composable () -> Unit = {},
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -63,7 +62,6 @@ fun BrandTopBar(
             }
         },
         actions = {
-            actions()
             if (overflowItems.isNotEmpty()) {
                 IconButton(onClick = { menuExpanded = true }) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "More")
