@@ -183,7 +183,11 @@ components:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.on-surface}"
     typography: "{typography.title-md}"
-    height: 56px
+    # Material 3's default small-variant top bar is 64dp (vs Material 2's
+    # 56dp). The Android implementation uses M3 TopAppBar directly so
+    # 64dp is the practical reality. Custom 56dp would require a hand-
+    # rolled component for marginal visual benefit.
+    height: 64px
   status-pill:
     backgroundColor: "{colors.surface-container-high}"
     textColor: "{colors.on-surface-variant}"

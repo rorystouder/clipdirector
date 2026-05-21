@@ -1,6 +1,14 @@
 import jwt, { type JwtPayload } from 'jsonwebtoken';
 import { createHash, randomBytes } from 'node:crypto';
 
+/**
+ * Issuer / audience for HS256 access tokens. If `JWT_SECRET` is ever reused
+ * for another signed thing (webhook signer, internal RPC), iss+aud prevent
+ * cross-purpose token confusion. Defense-in-depth — security audit L5.
+ */
+export const JWT_ISSUER = 'clipdirector-api';
+export const JWT_AUDIENCE = 'clipdirector-app';
+
 export interface AccessTokenClaims extends JwtPayload {
   sub: string;
   email: string;
@@ -17,11 +25,17 @@ export function signAccessToken(userId: string, email: string, cfg: TokenConfig)
     subject: userId,
     expiresIn: `${cfg.accessTtlMinutes}m`,
     algorithm: 'HS256',
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
   });
 }
 
 export function verifyAccessToken(token: string, secret: string): AccessTokenClaims {
-  const decoded = jwt.verify(token, secret, { algorithms: ['HS256'] });
+  const decoded = jwt.verify(token, secret, {
+    algorithms: ['HS256'],
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+  });
   if (typeof decoded === 'string' || !decoded.sub || typeof decoded.sub !== 'string') {
     throw new Error('Malformed token claims');
   }

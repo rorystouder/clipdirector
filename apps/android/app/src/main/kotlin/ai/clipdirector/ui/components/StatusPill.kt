@@ -32,7 +32,9 @@ fun StatusPill(status: JobStatus, modifier: Modifier = Modifier) {
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 shape = RoundedCornerShape(percent = 50),
             )
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            // Per DESIGN.md spec: sm horizontal (8dp) × xs vertical (4dp).
+            // Was 10×6 — off-scale magic numbers caught by design review.
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(

@@ -47,6 +47,11 @@ class CountingRequestBody(
     }
 
     companion object {
-        const val EMIT_THRESHOLD_BYTES = 64L * 1024L
+        // Emit every 256 KB instead of every 64 KB. A 100 MB upload now
+        // produces ~400 progress emissions instead of ~1,600 — still
+        // smooth visually (~25 ticks per second of upload at modest
+        // mobile speeds) but 4x fewer Compose recompositions for the
+        // upload progress bar. Performance review Tier 3 #8.
+        const val EMIT_THRESHOLD_BYTES = 256L * 1024L
     }
 }

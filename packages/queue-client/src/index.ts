@@ -85,9 +85,12 @@ export async function setJobStatus(
 export async function getJobStatus(redis: Redis, jobId: string): Promise<JobStatusRecord | null> {
   const data = await redis.hgetall(jobStatusKey(jobId));
   if (!data || Object.keys(data).length === 0 || !data.jobId) return null;
+  return parseRecord(data);
+}
 
+function parseRecord(data: Record<string, string>): JobStatusRecord {
   const record: JobStatusRecord = {
-    jobId: data.jobId,
+    jobId: data.jobId!,
     userId: data.userId ?? '',
     status: (data.status ?? 'queued') as JobStatusRecord['status'],
     progress: data.progress !== undefined ? Number(data.progress) : 0,
