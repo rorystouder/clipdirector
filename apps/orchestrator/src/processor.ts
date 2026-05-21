@@ -104,8 +104,15 @@ async function callClaudeWithRetry(
       'Manifest validation failed on first Claude response; retrying once with errors appended',
     );
 
+    // Performance review Tier 3 #12: on the retry, DROP the image payload.
+    // Claude already received the frames on the first call; the validation
+    // error is about the manifest's structure, not the visual interpretation.
+    // Sending images twice doubled token spend on every retry. The retry
+    // call goes through with empty frame samples + the validation errors;
+    // ClaudeClient handles `validationErrors` as a text-only follow-up.
     const retryRaw = await args.claude.callReasoning({
       ...args.params,
+      frameSamples: [],
       validationErrors: err.formatIssuesForPrompt(),
     });
 
