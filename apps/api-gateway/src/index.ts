@@ -41,6 +41,7 @@ async function main(): Promise<void> {
       maxPromptLength: env.MAX_PROMPT_LENGTH,
       maxClipBytes: env.MAX_CLIP_BYTES,
       signedUrlExpiryHours: 1,
+      trustProxy: env.TRUST_PROXY_HOPS,
     },
   });
 

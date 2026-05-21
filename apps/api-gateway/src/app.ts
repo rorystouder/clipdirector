@@ -1,4 +1,5 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import helmet from 'helmet';
 import multer from 'multer';
 import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
@@ -31,12 +32,33 @@ export interface AppDeps {
     maxClipBytes: number;
     signedUrlExpiryHours: number;
     authRateLimits?: AuthRateLimits;
+    /**
+     * Number of reverse-proxy hops in front of this gateway (e.g. 1 for a
+     * single ALB / nginx). Express's `trust proxy` setting; required for
+     * `req.ip` (and therefore express-rate-limit's per-IP behavior) to see
+     * the real client IP. Set to 0 (default) only for direct-internet
+     * deploys; never in production behind a load balancer.
+     */
+    trustProxy?: number;
   };
 }
 
 export function createApp(deps: AppDeps): Express {
   const app = express();
   app.disable('x-powered-by');
+
+  // Security headers: HSTS, X-Content-Type-Options nosniff, X-Frame-Options DENY,
+  // referrer-policy, etc. The default `contentSecurityPolicy` is overly strict
+  // for JSON APIs (it adds inline-script blocks that don't apply); disable it.
+  app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+
+  // Behind a reverse proxy, the immediate TCP peer is the LB IP. Without
+  // `trust proxy`, every request appears from that single IP and per-IP
+  // rate limiters become global throttles. The number = # of proxy hops.
+  if (deps.config.trustProxy && deps.config.trustProxy > 0) {
+    app.set('trust proxy', deps.config.trustProxy);
+  }
+
   app.use(express.json({ limit: '64kb' }));
 
   const repo = new AuthRepository(deps.db);

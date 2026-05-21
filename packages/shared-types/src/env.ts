@@ -33,6 +33,10 @@ export const apiGatewayEnvSchema = baseEnvSchema.extend({
   INPUT_BLOB_TTL_HOURS: z.coerce.number().int().positive().default(2),
   OUTPUT_BLOB_TTL_DAYS: z.coerce.number().int().positive().default(7),
   JOB_STATUS_TTL_DAYS: z.coerce.number().int().positive().default(7),
+  // Number of reverse-proxy hops in front of the gateway. 0 = direct
+  // internet; 1 = single LB/nginx; 2 = nested CDN→LB; etc. Required for
+  // express-rate-limit to see the real client IP. Set in production.
+  TRUST_PROXY_HOPS: z.coerce.number().int().nonnegative().default(0),
 });
 
 export const orchestratorEnvSchema = baseEnvSchema.extend({
