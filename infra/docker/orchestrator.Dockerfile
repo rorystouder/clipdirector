@@ -16,9 +16,12 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates ffmpeg tini \
  && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system --gid 1000 clipdirector \
+ && useradd --system --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin clipdirector
 WORKDIR /app
-COPY --from=builder /deploy ./
+COPY --from=builder --chown=clipdirector:clipdirector /deploy ./
+USER clipdirector
 ENV NODE_ENV=production \
     FFMPEG_PATH=/usr/bin/ffmpeg \
     FFPROBE_PATH=/usr/bin/ffprobe
